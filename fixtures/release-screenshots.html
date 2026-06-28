@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PromptCrate Release Screenshots</title>
+    <script>
+      document.documentElement.dataset.scene =
+        new URLSearchParams(location.search).get("scene") || "all";
+    </script>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #172026;
+        background: #f8faf9;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 32px;
+      }
+
+      html[data-scene="options"],
+      html[data-scene="menu"],
+      html[data-scene="options"] body,
+      html[data-scene="menu"] body {
+        overflow: hidden;
+      }
+
+      html[data-scene="options"] body,
+      html[data-scene="menu"] body {
+        padding: 24px;
+      }
+
+      .stage {
+        display: grid;
+        gap: 28px;
+        max-width: 1120px;
+        margin: 0 auto;
+      }
+
+      html[data-scene="options"] #menu,
+      html[data-scene="menu"] #options {
+        display: none;
+      }
+
+      .scene {
+        min-height: 720px;
+        overflow: hidden;
+        border: 1px solid #d8e2e6;
+        border-radius: 8px;
+        background: #fffdf8;
+      }
+
+      html[data-scene="options"] .scene,
+      html[data-scene="menu"] .scene {
+        min-height: calc(100vh - 48px);
+      }
+
+      .options-scene {
+        display: grid;
+        grid-template-columns: 320px 1fr;
+      }
+
+      .sidebar {
+        display: grid;
+        grid-template-rows: auto auto 1fr auto;
+        gap: 12px;
+        padding: 18px;
+        border-right: 1px solid #d8e2e6;
+        background: #fffdf8;
+      }
+
+      .toolbar,
+      .editor-header,
+      .editor-actions,
+      .actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .toolbar,
+      .editor-header {
+        justify-content: space-between;
+      }
+
+      h1,
+      h2,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 18px;
+      }
+
+      h2 {
+        font-size: 20px;
+      }
+
+      button,
+      input,
+      textarea {
+        font: inherit;
+      }
+
+      button,
+      .file-button {
+        min-height: 34px;
+        padding: 7px 10px;
+        border: 1px solid #b8c6cf;
+        border-radius: 7px;
+        color: #172026;
+        background: #fff;
+      }
+
+      .primary {
+        color: #fff;
+        border-color: #256b65;
+        background: #2f7f78;
+      }
+
+      input,
+      textarea {
+        width: 100%;
+        border: 1px solid #b8c6cf;
+        border-radius: 7px;
+        color: #172026;
+        background: #fff;
+      }
+
+      input {
+        min-height: 38px;
+        padding: 8px 10px;
+      }
+
+      textarea {
+        min-height: 300px;
+        padding: 10px;
+        resize: none;
+      }
+
+      .template-list {
+        display: grid;
+        align-content: start;
+        gap: 6px;
+        overflow: auto;
+      }
+
+      .template-row {
+        display: grid;
+        gap: 3px;
+        min-height: 58px;
+        padding: 9px;
+        text-align: left;
+        border: 1px solid #b8c6cf;
+        border-radius: 7px;
+        background: #f6f0e7;
+      }
+
+      .template-row.selected {
+        border-color: #2f7f78;
+        background: #ecf4f1;
+      }
+
+      .row-title {
+        font-weight: 700;
+      }
+
+      .row-tags,
+      .muted,
+      .status {
+        color: #526470;
+        font-size: 12px;
+      }
+
+      .import-export {
+        display: grid;
+        gap: 8px;
+        padding-top: 12px;
+        border-top: 1px solid #d8e2e6;
+      }
+
+      .editor {
+        padding: 24px;
+      }
+
+      .editor-header {
+        gap: 16px;
+        margin-bottom: 18px;
+      }
+
+      .editor-actions {
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
+      .form-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        color: #334650;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .wide,
+      .body-field {
+        grid-column: 1 / -1;
+      }
+
+      .page-scene {
+        position: relative;
+        padding: 36px;
+        background: #eef3f4;
+      }
+
+      .mock-page {
+        max-width: 820px;
+        margin: 0 auto;
+        padding: 28px;
+        border: 1px solid #d8e2e6;
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      .mock-editor {
+        min-height: 180px;
+        margin-top: 18px;
+        padding: 14px;
+        border: 1px solid #b8c6cf;
+        border-radius: 7px;
+        background: #fffdf8;
+      }
+
+      .menu {
+        position: absolute;
+        top: 112px;
+        left: 50%;
+        width: 420px;
+        transform: translateX(-50%);
+        border: 1px solid #c9d4dc;
+        border-radius: 8px;
+        background: #fffdf8;
+        box-shadow: 0 18px 48px rgba(23, 32, 38, 0.18);
+      }
+
+      .menu header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 14px;
+        border-bottom: 1px solid #e2e8ec;
+      }
+
+      .menu-body {
+        display: grid;
+        gap: 10px;
+        padding: 12px;
+      }
+
+      .menu-item {
+        display: grid;
+        gap: 4px;
+        min-height: 72px;
+        padding: 10px;
+        border: 1px solid transparent;
+        border-radius: 7px;
+        background: #f6f0e7;
+      }
+
+      .menu-item.selected {
+        border-color: #2f7f78;
+        background: #ecf4f1;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="stage">
+      <section class="scene options-scene" id="options">
+        <aside class="sidebar">
+          <div class="toolbar">
+            <h1>PromptCrate</h1>
+            <button>New</button>
+          </div>
+          <input value="rewrite" aria-label="Search templates" />
+          <div class="template-list">
+            <div class="template-row selected">
+              <span class="row-title">* Rewrite clearer</span>
+              <span class="row-tags">writing, rewrite</span>
+            </div>
+            <div class="template-row">
+              <span class="row-title">Compare options</span>
+              <span class="row-tags">analysis, decision</span>
+            </div>
+            <div class="template-row">
+              <span class="row-title">Draft reply</span>
+              <span class="row-tags">email, writing</span>
+            </div>
+          </div>
+          <section class="import-export">
+            <button>Export JSON</button>
+            <button>Import JSON</button>
+          </section>
+        </aside>
+        <section class="editor">
+          <div class="editor-header">
+            <div>
+              <h2>Edit template</h2>
+              <p class="status">Saved "Rewrite clearer".</p>
+            </div>
+            <div class="editor-actions">
+              <button>Unfavorite</button>
+              <button>Copy</button>
+              <button>Delete</button>
+              <button class="primary">Save</button>
+            </div>
+          </div>
+          <div class="form-grid">
+            <label>
+              <span>ID</span>
+              <input value="rewrite-clearer" />
+            </label>
+            <label>
+              <span>Title</span>
+              <input value="Rewrite clearer" />
+            </label>
+            <label class="wide">
+              <span>Tags</span>
+              <input value="writing, rewrite" />
+            </label>
+            <label class="body-field">
+              <span>Body</span>
+              <textarea>Rewrite the following text so it is clearer, shorter, and keeps the original meaning:
+
+{{text}}</textarea>
+            </label>
+          </div>
+        </section>
+      </section>
+
+      <section class="scene page-scene" id="menu">
+        <div class="mock-page">
+          <h1>AI drafting workspace</h1>
+          <p class="muted">Focus a text field, press Ctrl+Shift+P, choose a template, fill variables, and insert.</p>
+          <div class="mock-editor" contenteditable="true">Draft a launch note for...</div>
+        </div>
+        <div class="menu">
+          <header>
+            <h2>PromptCrate</h2>
+            <button aria-label="Close">x</button>
+          </header>
+          <div class="menu-body">
+            <input value="draft" />
+            <div class="menu-item selected">
+              <strong>* Draft reply</strong>
+              <span class="muted">Draft a warm, concise reply to this message. Tone: {{tone}}.</span>
+              <span class="muted">email, writing</span>
+            </div>
+            <div class="menu-item">
+              <strong>Extract actions</strong>
+              <span class="muted">Extract action items, owners, and due dates from the text below.</span>
+              <span class="muted">meeting, tasks</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

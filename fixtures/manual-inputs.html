@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PromptCrate 手动输入测试页</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 720px;
+        margin: 40px auto;
+        padding: 0 16px;
+      }
+      fieldset {
+        margin-bottom: 16px;
+      }
+      textarea,
+      input[type="text"],
+      #editable {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 8px;
+        font-size: 14px;
+      }
+      #editable {
+        min-height: 80px;
+        border: 1px solid #888;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>PromptCrate 手动输入测试页</h1>
+    <p>聚焦下列任意输入框，按快捷键打开模板菜单，验证三类插入目标。</p>
+
+    <fieldset>
+      <legend>textarea</legend>
+      <textarea id="textarea"></textarea>
+    </fieldset>
+
+    <fieldset>
+      <legend>input type="text"</legend>
+      <input id="text-input" type="text" />
+    </fieldset>
+
+    <fieldset>
+      <legend>contenteditable</legend>
+      <div id="editable" contenteditable="true"></div>
+    </fieldset>
+  </body>
+</html>
