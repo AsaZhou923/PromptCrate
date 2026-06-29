@@ -1,17 +1,26 @@
-import { MESSAGE_TYPE } from "../shared/message-contract";
 import {
-  createDefaultTemplates,
-  STORAGE_KEYS,
-  STORAGE_SCHEMA_VERSION,
-} from "../shared/templates";
+  detectFocusedInsertTarget,
+  FrameProbeResult,
+  selectPromptMenuFrameIds,
+} from "./frame-targeting";
+import { MESSAGE_TYPE, isRuntimeMessage } from "../shared/message-contract";
+import { initializePromptCrateStorage } from "../shared/storage";
 
 const OPEN_PROMPT_COMMAND = "open-prompt-menu";
 const CONTENT_SCRIPT_FILE = "content-entry.js";
 
 chrome.runtime.onInstalled.addListener(() => {
-  void initializeDefaultTemplates().catch((error: unknown) => {
+  void initializePromptCrateStorage().catch((error: unknown) => {
     console.error("[prompt-crate] Failed to initialize templates", error);
   });
+});
+
+chrome.runtime.onMessage.addListener((message: unknown) => {
+  if (!isRuntimeMessage(message) || message.type !== MESSAGE_TYPE.TEMPLATES_UPDATED) {
+    return;
+  }
+
+  void broadcastTemplatesUpdated();
 });
 
 chrome.commands.onCommand.addListener((command) => {
@@ -34,7 +43,8 @@ async function openPromptMenuForActiveTab(): Promise<void> {
     return;
   }
 
-  await sendOpenPromptMenu(tabId);
+  const frameIds = await getPromptMenuFrameIds(tabId);
+  await sendOpenPromptMenu(tabId, frameIds);
 }
 
 async function getActiveTabId(): Promise<number | null> {
@@ -50,7 +60,7 @@ async function getActiveTabId(): Promise<number | null> {
 async function injectContentScript(tabId: number): Promise<boolean> {
   try {
     await chrome.scripting.executeScript({
-      target: { tabId },
+      target: { tabId, allFrames: true },
       files: [CONTENT_SCRIPT_FILE],
     });
     return true;
@@ -63,37 +73,67 @@ async function injectContentScript(tabId: number): Promise<boolean> {
   }
 }
 
-async function sendOpenPromptMenu(tabId: number): Promise<void> {
+async function getPromptMenuFrameIds(tabId: number): Promise<number[]> {
   try {
-    await chrome.tabs.sendMessage(tabId, {
-      type: MESSAGE_TYPE.OPEN_PROMPT_MENU,
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: detectFocusedInsertTarget,
     });
+
+    return selectPromptMenuFrameIds(results as FrameProbeResult[]);
   } catch (error: unknown) {
     console.warn(
-      "[prompt-crate] Content script did not accept OPEN_PROMPT_MENU",
+      "[prompt-crate] Could not detect focused frame, falling back to top frame",
       getErrorMessage(error),
     );
+    return [0];
   }
 }
 
-async function initializeDefaultTemplates(): Promise<void> {
-  const existing = await chrome.storage.local.get([
-    STORAGE_KEYS.schemaVersion,
-    STORAGE_KEYS.templates,
-  ]);
-  const updates: Record<string, unknown> = {};
+async function sendOpenPromptMenu(tabId: number, frameIds: number[]): Promise<void> {
+  let didSend = false;
 
-  if (existing[STORAGE_KEYS.schemaVersion] !== STORAGE_SCHEMA_VERSION) {
-    updates[STORAGE_KEYS.schemaVersion] = STORAGE_SCHEMA_VERSION;
+  for (const frameId of frameIds) {
+    try {
+      await chrome.tabs.sendMessage(
+        tabId,
+        {
+          type: MESSAGE_TYPE.OPEN_PROMPT_MENU,
+        },
+        { frameId },
+      );
+      didSend = true;
+    } catch (error: unknown) {
+      console.warn(
+        `[prompt-crate] Frame ${frameId} did not accept OPEN_PROMPT_MENU`,
+        getErrorMessage(error),
+      );
+    }
   }
 
-  if (!Array.isArray(existing[STORAGE_KEYS.templates])) {
-    updates[STORAGE_KEYS.templates] = createDefaultTemplates();
+  if (!didSend) {
+    console.warn("[prompt-crate] No frame accepted OPEN_PROMPT_MENU");
   }
+}
 
-  if (Object.keys(updates).length > 0) {
-    await chrome.storage.local.set(updates);
-  }
+async function broadcastTemplatesUpdated(): Promise<void> {
+  const tabs = await chrome.tabs.query({});
+
+  await Promise.all(
+    tabs.map(async (tab) => {
+      if (typeof tab.id !== "number") {
+        return;
+      }
+
+      try {
+        await chrome.tabs.sendMessage(tab.id, {
+          type: MESSAGE_TYPE.TEMPLATES_UPDATED,
+        });
+      } catch {
+        return;
+      }
+    }),
+  );
 }
 
 function getErrorMessage(error: unknown): string {

@@ -51,6 +51,23 @@ describe("template import and export", () => {
     });
   });
 
+  it("rejects duplicate template ids after normalization", () => {
+    const parsed = parseTemplateImportJson(
+      JSON.stringify({
+        schemaVersion: STORAGE_SCHEMA_VERSION,
+        templates: [
+          { ...template, id: "rewrite-clearer" },
+          { ...template, id: " rewrite-clearer ", title: "Duplicate" },
+        ],
+      }),
+    );
+
+    expect(parsed).toEqual({
+      ok: false,
+      error: "Import file contains duplicate template id: rewrite-clearer.",
+    });
+  });
+
   it("merges imported templates and reports updates", () => {
     const result = applyTemplateImport(
       [template],
@@ -80,4 +97,3 @@ describe("template import and export", () => {
     expect(result.templates.map((item) => item.id)).toEqual(["replacement"]);
   });
 });
-

@@ -4,6 +4,7 @@ import {
   PromptTemplate,
   STORAGE_KEYS,
   STORAGE_SCHEMA_VERSION,
+  validateTemplateCollection,
 } from "./templates";
 
 export type PromptCrateStore = {
@@ -30,24 +31,51 @@ export async function initializePromptCrateStorage(
   ]);
 
   const storedTemplates = existing[STORAGE_KEYS.templates];
-  const templates = Array.isArray(storedTemplates) &&
-    storedTemplates.every(isPromptTemplate)
-    ? storedTemplates
-    : createDefaultTemplates(now);
+  const updates: Record<string, unknown> = {};
+  let templates: PromptTemplate[];
+
+  if (Array.isArray(storedTemplates) && storedTemplates.every(isPromptTemplate)) {
+    const validation = validateTemplateCollection(storedTemplates, now);
+
+    if (validation.ok) {
+      templates = validation.templates;
+
+      if (!areTemplatesEqual(storedTemplates, templates)) {
+        updates[STORAGE_KEYS.templates] = templates;
+      }
+    } else {
+      templates = createDefaultTemplates(now);
+      updates[STORAGE_KEYS.templates] = templates;
+      updates[STORAGE_KEYS.invalidTemplatesBackup] = {
+        reason: validation.error,
+        backedUpAt: now,
+        templates: storedTemplates,
+      };
+    }
+  } else {
+    templates = createDefaultTemplates(now);
+    updates[STORAGE_KEYS.templates] = templates;
+
+    if (Array.isArray(storedTemplates)) {
+      updates[STORAGE_KEYS.invalidTemplatesBackup] = {
+        reason: "Stored templates are not valid PromptCrate templates.",
+        backedUpAt: now,
+        templates: storedTemplates,
+      };
+    }
+  }
 
   const store: PromptCrateStore = {
     schemaVersion: STORAGE_SCHEMA_VERSION,
     templates,
   };
 
-  if (
-    existing[STORAGE_KEYS.schemaVersion] !== STORAGE_SCHEMA_VERSION ||
-    storedTemplates !== templates
-  ) {
-    await storage.set({
-      [STORAGE_KEYS.schemaVersion]: store.schemaVersion,
-      [STORAGE_KEYS.templates]: store.templates,
-    });
+  if (existing[STORAGE_KEYS.schemaVersion] !== STORAGE_SCHEMA_VERSION) {
+    updates[STORAGE_KEYS.schemaVersion] = store.schemaVersion;
+  }
+
+  if (Object.keys(updates).length > 0) {
+    await storage.set(updates);
   }
 
   return store;
@@ -64,9 +92,15 @@ export async function writePromptTemplates(
   templates: PromptTemplate[],
   storage = getChromeLocalStorage(),
 ): Promise<void> {
+  const validation = validateTemplateCollection(templates);
+
+  if (!validation.ok) {
+    throw new Error(validation.error);
+  }
+
   await storage.set({
     [STORAGE_KEYS.schemaVersion]: STORAGE_SCHEMA_VERSION,
-    [STORAGE_KEYS.templates]: templates,
+    [STORAGE_KEYS.templates]: validation.templates,
   });
 }
 
@@ -84,3 +118,6 @@ export async function updatePromptTemplate(
   return nextTemplates;
 }
 
+function areTemplatesEqual(left: PromptTemplate[], right: PromptTemplate[]): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}

@@ -153,13 +153,20 @@ function insertIntoTextControl(
 
   try {
     target.focus();
-    target.value = `${originalValue.slice(0, start)}${text}${originalValue.slice(end)}`;
+    if (!dispatchBeforeInputEvent(target, text)) {
+      return false;
+    }
+
+    setTextControlValue(
+      target,
+      `${originalValue.slice(0, start)}${text}${originalValue.slice(end)}`,
+    );
     const nextCaret = start + text.length;
     target.setSelectionRange(nextCaret, nextCaret);
     dispatchInputEvent(target, text);
     return true;
   } catch {
-    target.value = originalValue;
+    setTextControlValue(target, originalValue);
     return false;
   }
 }
@@ -176,14 +183,30 @@ function insertIntoContentEditable(
     target.focus();
 
     const range = getUsableRange(savedSelection, target, ownerDocument);
+    const selection = ownerDocument.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    if (!dispatchBeforeInputEvent(target, text)) {
+      return false;
+    }
+
+    if (target.innerHTML !== originalHtml) {
+      dispatchInputEvent(target, text);
+      return true;
+    }
+
+    if (tryExecCommandInsertText(ownerDocument, text)) {
+      dispatchInputEvent(target, text);
+      return true;
+    }
+
     range.deleteContents();
 
     const textNode = ownerDocument.createTextNode(text);
     range.insertNode(textNode);
     range.setStartAfter(textNode);
     range.collapse(true);
-
-    const selection = ownerDocument.getSelection();
     selection?.removeAllRanges();
     selection?.addRange(range);
 
@@ -241,6 +264,36 @@ function clampSelectionIndex(index: number, max: number): number {
   return Math.min(Math.max(index, 0), max);
 }
 
+function setTextControlValue(target: TextControlTarget, value: string): void {
+  const prototype = target instanceof HTMLTextAreaElement
+    ? HTMLTextAreaElement.prototype
+    : HTMLInputElement.prototype;
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
+
+  if (descriptor?.set) {
+    descriptor.set.call(target, value);
+    return;
+  }
+
+  target.value = value;
+}
+
+function dispatchBeforeInputEvent(target: InsertTarget, text: string): boolean {
+  const event = typeof InputEvent === "function"
+    ? new InputEvent("beforeinput", {
+        bubbles: true,
+        cancelable: true,
+        inputType: "insertText",
+        data: text,
+      })
+    : new Event("beforeinput", {
+        bubbles: true,
+        cancelable: true,
+      });
+
+  return target.dispatchEvent(event);
+}
+
 function dispatchInputEvent(target: InsertTarget, text: string): void {
   const event = typeof InputEvent === "function"
     ? new InputEvent("input", {
@@ -253,3 +306,10 @@ function dispatchInputEvent(target: InsertTarget, text: string): void {
   target.dispatchEvent(event);
 }
 
+function tryExecCommandInsertText(ownerDocument: Document, text: string): boolean {
+  try {
+    return ownerDocument.execCommand?.("insertText", false, text) === true;
+  } catch {
+    return false;
+  }
+}

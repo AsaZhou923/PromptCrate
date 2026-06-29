@@ -56,12 +56,12 @@ PromptCrate 是一个 **Manifest V3** 浏览器扩展。它解决一个具体的
 3. 打开 Chrome / Chromium 的 `chrome://extensions`。
 4. 开启 **Developer mode**。
 5. 点击 **Load unpacked**，选择解压后的目录或本仓库的 `dist/`。
-6. 在任意网页输入框中聚焦，按 `Ctrl+Shift+P` 打开 PromptCrate。
+6. 在任意网页输入框中聚焦，按 `Ctrl+Shift+2`（macOS：`Command+Shift+2`）打开 PromptCrate。
 
 ### 插入模板
 
 1. 聚焦 `textarea`、文本 `input` 或 `contenteditable` 输入区。
-2. 按 `Ctrl+Shift+P`。
+2. 按 `Ctrl+Shift+2`（macOS：`Command+Shift+2`）。
 3. 搜索模板，使用上下键切换，按 Enter 选择。
 4. 如果模板包含 `{{变量名}}`，填写变量表单。
 5. 点击 Insert，模板会插入到原光标位置。
@@ -91,7 +91,7 @@ PromptCrate 只使用 `activeTab`、`scripting`、`storage`。完整说明见 `d
 
 ```bash
 pnpm install
-pnpm dev        # vite build --watch，持续构建到 dist/
+pnpm dev        # 同时 watch extension 与 content script 构建到 dist/
 ```
 
 ### 本地加载插件
@@ -108,14 +108,14 @@ pnpm dev        # vite build --watch，持续构建到 dist/
 
 ### 手动测试页
 
-`fixtures/manual-inputs.html` 提供 `textarea` / `input[type=text]` / `contenteditable` 三类输入目标，用于快速验证插入逻辑，不必每次依赖真实网站。直接用浏览器打开该文件即可。
+`fixtures/manual-inputs.html` 提供 `textarea` / `input[type=text]` / `contenteditable` / open Shadow DOM / same-origin iframe 输入目标，用于快速验证插入逻辑，不必每次依赖真实网站。直接用浏览器打开该文件即可。
 
 ## 脚本
 
 | 命令 | 作用 |
 |---|---|
-| `pnpm dev` | `vite build --watch`，持续构建。 |
-| `pnpm build` | 构建到 `dist/`，包含 manifest 复制。 |
+| `pnpm dev` | 同时 watch extension 与 content script 构建到 `dist/`。 |
+| `pnpm build` | 构建到 `dist/`，包含 manifest 复制与 content script IIFE 打包。 |
 | `pnpm test` | `vitest run`，跑单元和 DOM 测试。 |
 | `pnpm test:watch` | `vitest` watch 模式。 |
 | `pnpm lint` | `eslint .`。 |
@@ -170,7 +170,6 @@ PromptCrate/
 │  │  └─ service-worker.ts    快捷键调度、注入和默认模板初始化
 │  ├─ content/
 │  │  ├─ content-entry.ts     页面内菜单、变量填写、插入调度
-│  │  ├─ content-store.ts     content script 自包含模板工具
 │  │  └─ input-target.ts      输入目标识别、selection、DOM 插入
 │  ├─ options/
 │  │  └─ options-app.tsx      模板管理、导入导出

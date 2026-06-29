@@ -24,6 +24,7 @@ pnpm test
 pnpm lint
 pnpm check
 pnpm build
+pnpm audit --audit-level moderate
 pnpm package:zip
 ```
 
@@ -34,8 +35,8 @@ pnpm package:zip
 3. 开启 Developer mode。
 4. 选择 Load unpacked，加载 `dist/`。
 5. 打开 `fixtures/manual-inputs.html`。
-6. 分别聚焦 `textarea`、文本 `input`、`contenteditable`。
-7. 按 `Ctrl+Shift+P` 打开 PromptCrate。
+6. 分别聚焦 `textarea`、文本 `input`、`contenteditable`、open Shadow DOM input、same-origin iframe textarea。
+7. 按 `Ctrl+Shift+2`（macOS：`Command+Shift+2`）打开 PromptCrate。
 8. 搜索模板、填写变量并插入。
 9. 确认插入后页面触发输入事件，原输入内容不丢失。
 

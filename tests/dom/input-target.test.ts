@@ -13,9 +13,12 @@ describe("DOM text insertion", () => {
     const textarea = document.createElement("textarea");
     textarea.value = "hello world";
     document.body.append(textarea);
-    let inputEvents = 0;
+    const events: string[] = [];
+    textarea.addEventListener("beforeinput", () => {
+      events.push("beforeinput");
+    });
     textarea.addEventListener("input", () => {
-      inputEvents += 1;
+      events.push("input");
     });
 
     const savedSelection: SavedSelection = {
@@ -28,7 +31,7 @@ describe("DOM text insertion", () => {
     expect(insertTextAtSavedSelection(savedSelection, "PromptCrate")).toBe(true);
     expect(textarea.value).toBe("hello PromptCrate");
     expect(textarea.selectionStart).toBe("hello PromptCrate".length);
-    expect(inputEvents).toBe(1);
+    expect(events).toEqual(["beforeinput", "input"]);
   });
 
   it("inserts into text input at the saved selection", () => {
@@ -46,6 +49,64 @@ describe("DOM text insertion", () => {
 
     expect(insertTextAtSavedSelection(savedSelection, "later")).toBe(true);
     expect(input.value).toBe("ask later");
+  });
+
+  it("uses the native value setter so controlled inputs observe the input event", () => {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = "ask now";
+    document.body.append(input);
+
+    let ownSetterCalls = 0;
+    const nativeDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    );
+
+    if (!nativeDescriptor?.get || !nativeDescriptor.set) {
+      throw new Error("Missing native input value descriptor");
+    }
+
+    Object.defineProperty(input, "value", {
+      configurable: true,
+      get() {
+        return nativeDescriptor.get?.call(this);
+      },
+      set(value: string) {
+        ownSetterCalls += 1;
+        nativeDescriptor.set?.call(this, value);
+      },
+    });
+
+    const savedSelection: SavedSelection = {
+      kind: "text-control",
+      target: input,
+      start: 4,
+      end: 7,
+    };
+
+    expect(insertTextAtSavedSelection(savedSelection, "later")).toBe(true);
+    expect(input.value).toBe("ask later");
+    expect(ownSetterCalls).toBe(0);
+  });
+
+  it("does not insert when beforeinput is canceled", () => {
+    const textarea = document.createElement("textarea");
+    textarea.value = "hello world";
+    document.body.append(textarea);
+    textarea.addEventListener("beforeinput", (event) => {
+      event.preventDefault();
+    });
+
+    const savedSelection: SavedSelection = {
+      kind: "text-control",
+      target: textarea,
+      start: 6,
+      end: 11,
+    };
+
+    expect(insertTextAtSavedSelection(savedSelection, "PromptCrate")).toBe(false);
+    expect(textarea.value).toBe("hello world");
   });
 
   it("inserts into contenteditable at the saved range", () => {
@@ -96,4 +157,3 @@ describe("DOM text insertion", () => {
     expect(input.value).toBe("abc");
   });
 });
-

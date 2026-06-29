@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractTemplateVariables,
+  normalizeTemplate,
   PromptTemplate,
   renderTemplate,
   searchTemplates,
@@ -42,6 +43,21 @@ describe("template variables", () => {
 });
 
 describe("template validation and search", () => {
+  it("normalizes metadata without trimming prompt body whitespace", () => {
+    const normalized = normalizeTemplate({
+      ...baseTemplate,
+      id: " rewrite-clearer ",
+      title: " Rewrite clearer ",
+      body: "\n  Keep this spacing.  \n",
+      tags: [" writing ", "writing", ""],
+    });
+
+    expect(normalized.id).toBe("rewrite-clearer");
+    expect(normalized.title).toBe("Rewrite clearer");
+    expect(normalized.body).toBe("\n  Keep this spacing.  \n");
+    expect(normalized.tags).toEqual(["writing"]);
+  });
+
   it("validates required template fields", () => {
     expect(
       validateTemplate({
@@ -102,4 +118,3 @@ describe("template validation and search", () => {
     ]);
   });
 });
-

@@ -3,19 +3,17 @@ import {
   insertTextAtSavedSelection,
   SavedSelection,
 } from "./input-target";
+import { MESSAGE_TYPE, isRuntimeMessage } from "../shared/message-contract";
+import { readPromptTemplates, writePromptTemplates } from "../shared/storage";
 import {
-  CONTENT_MESSAGE_TYPE,
   extractTemplateVariables,
-  isContentRuntimeMessage,
   PromptTemplate,
-  readPromptTemplates,
   renderTemplate,
   searchTemplates,
   sortTemplatesForMenu,
   TemplateVariable,
   touchTemplateLastUsed,
-  writePromptTemplates,
-} from "./content-store";
+} from "../shared/templates";
 
 declare global {
   interface Window {
@@ -45,18 +43,18 @@ if (!window.__promptCrateContentEntryLoaded) {
   let state: MenuState | null = null;
 
   chrome.runtime.onMessage.addListener((message: unknown) => {
-    if (!isContentRuntimeMessage(message)) {
+    if (!isRuntimeMessage(message)) {
       return;
     }
 
     if (
-      message.type === CONTENT_MESSAGE_TYPE.OPEN_PROMPT_MENU ||
-      message.type === CONTENT_MESSAGE_TYPE.REOPEN_MENU
+      message.type === MESSAGE_TYPE.OPEN_PROMPT_MENU ||
+      message.type === MESSAGE_TYPE.REOPEN_MENU
     ) {
       void openPromptMenu();
     }
 
-    if (message.type === CONTENT_MESSAGE_TYPE.TEMPLATES_UPDATED && state) {
+    if (message.type === MESSAGE_TYPE.TEMPLATES_UPDATED && state) {
       void reloadTemplates();
     }
   });
@@ -134,10 +132,17 @@ if (!window.__promptCrateContentEntryLoaded) {
       return;
     }
 
+    const focusTarget = state.savedSelection?.target;
     state.host.style.display = "none";
     state.shadow.textContent = "";
     detachOutsideClickHandler();
     state = null;
+
+    if (focusTarget?.isConnected) {
+      queueMicrotask(() => {
+        focusTarget.focus();
+      });
+    }
   }
 
   function attachOutsideClickHandler(host: HTMLDivElement): void {
@@ -174,11 +179,17 @@ if (!window.__promptCrateContentEntryLoaded) {
     const panel = document.createElement("section");
     panel.className = "panel";
     panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-modal", "true");
     panel.setAttribute("aria-label", "PromptCrate");
+    panel.tabIndex = -1;
+    panel.addEventListener("keydown", handlePanelKeyDown);
 
     if (state.error && !state.savedSelection) {
       panel.append(createHeader("PromptCrate"), createNotice(state.error));
       state.shadow.append(panel);
+      queueMicrotask(() => {
+        panel.focus();
+      });
       return;
     }
 
@@ -203,7 +214,7 @@ if (!window.__promptCrateContentEntryLoaded) {
     closeButton.type = "button";
     closeButton.title = "Close";
     closeButton.setAttribute("aria-label", "Close");
-    closeButton.textContent = "x";
+    closeButton.textContent = "\u00d7";
     closeButton.addEventListener("click", closeMenu);
 
     header.append(heading, closeButton);
@@ -221,6 +232,10 @@ if (!window.__promptCrateContentEntryLoaded) {
     const searchInput = document.createElement("input");
     searchInput.className = "search";
     searchInput.type = "search";
+    searchInput.setAttribute("role", "combobox");
+    searchInput.setAttribute("aria-controls", "promptcrate-template-list");
+    searchInput.setAttribute("aria-expanded", "true");
+    searchInput.setAttribute("aria-autocomplete", "list");
     searchInput.placeholder = "Search templates";
     searchInput.value = state.query;
     searchInput.addEventListener("input", () => {
@@ -235,21 +250,35 @@ if (!window.__promptCrateContentEntryLoaded) {
     searchInput.addEventListener("keydown", handleListKeyDown);
 
     const filteredTemplates = getFilteredTemplates();
+    const activeOptionId = filteredTemplates[state.selectedIndex]
+      ? `promptcrate-template-option-${state.selectedIndex}`
+      : null;
+
+    if (activeOptionId) {
+      searchInput.setAttribute("aria-activedescendant", activeOptionId);
+    }
+
     const list = document.createElement("div");
+    list.id = "promptcrate-template-list";
     list.className = "template-list";
     list.setAttribute("role", "listbox");
+    list.setAttribute("aria-label", "Templates");
 
     if (filteredTemplates.length === 0) {
       list.append(createNotice("No matching templates."));
     } else {
       filteredTemplates.forEach((template, index) => {
-        const item = document.createElement("button");
+        const item = document.createElement("div");
+        item.id = `promptcrate-template-option-${index}`;
         item.className = index === state?.selectedIndex
           ? "template-item selected"
           : "template-item";
-        item.type = "button";
+        item.tabIndex = -1;
         item.setAttribute("role", "option");
         item.setAttribute("aria-selected", String(index === state?.selectedIndex));
+        item.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+        });
         item.addEventListener("click", () => {
           void chooseTemplate(template);
         });
@@ -317,6 +346,67 @@ if (!window.__promptCrateContentEntryLoaded) {
       event.preventDefault();
       void chooseTemplate(filteredTemplates[state.selectedIndex]);
     }
+  }
+
+  function handlePanelKeyDown(event: KeyboardEvent): void {
+    if (!state) {
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeMenu();
+      return;
+    }
+
+    if (event.key === "Tab") {
+      trapFocus(event);
+    }
+  }
+
+  function trapFocus(event: KeyboardEvent): void {
+    if (!state) {
+      return;
+    }
+
+    const focusableElements = getFocusableElements(state.shadow);
+
+    if (focusableElements.length === 0) {
+      event.preventDefault();
+      return;
+    }
+
+    const firstElement = focusableElements[0];
+    const lastElement = focusableElements[focusableElements.length - 1];
+    const activeElement = state.shadow.activeElement;
+
+    if (event.shiftKey && activeElement === firstElement) {
+      event.preventDefault();
+      lastElement.focus();
+      return;
+    }
+
+    if (!event.shiftKey && activeElement === lastElement) {
+      event.preventDefault();
+      firstElement.focus();
+    }
+  }
+
+  function getFocusableElements(root: ShadowRoot): HTMLElement[] {
+    return [...root.querySelectorAll<HTMLElement>(
+      'button, input, textarea, select, [href], [tabindex]:not([tabindex="-1"])',
+    )].filter(
+      (element) => {
+        const style = window.getComputedStyle(element);
+
+        return (
+          !element.hasAttribute("disabled") &&
+          element.getAttribute("aria-hidden") !== "true" &&
+          style.display !== "none" &&
+          style.visibility !== "hidden"
+        );
+      },
+    );
   }
 
   async function chooseTemplate(template: PromptTemplate): Promise<void> {
@@ -468,10 +558,12 @@ if (!window.__promptCrateContentEntryLoaded) {
       return;
     }
 
-    const nextTemplates = state.templates.map((item) =>
+    const currentTemplates = await readPromptTemplates();
+    const nextTemplates = currentTemplates.map((item) =>
       item.id === template.id ? touchTemplateLastUsed(item) : item,
     );
     await writePromptTemplates(nextTemplates);
+    state.templates = sortTemplatesForMenu(nextTemplates);
     closeMenu();
   }
 
