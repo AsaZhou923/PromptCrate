@@ -27,7 +27,6 @@ export default defineConfig({
     rollupOptions: {
       input: {
         "service-worker": resolve(__dirname, "src/background/service-worker.ts"),
-        "content-entry": resolve(__dirname, "src/content/content-entry.ts"),
         options: resolve(__dirname, "options.html"),
       },
       output: {

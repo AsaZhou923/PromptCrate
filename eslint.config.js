@@ -5,7 +5,7 @@ import tseslint from "typescript-eslint";
 // 只用推荐规则集，保持 Phase 0 简单，后续再按需收敛。
 export default tseslint.config(
   {
-    ignores: ["dist/**", "node_modules/**"],
+    ignores: ["dist/**", "node_modules/**", "release/**"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -21,7 +21,12 @@ export default tseslint.config(
   },
   {
     // Vite 配置和构建脚本运行在 Node 环境。
-    files: ["vite.config.ts", "vitest.config.ts", "eslint.config.js"],
+    files: [
+      "vite.config.ts",
+      "vite.content.config.ts",
+      "vitest.config.ts",
+      "eslint.config.js",
+    ],
     languageOptions: {
       globals: {
         __dirname: "readonly",

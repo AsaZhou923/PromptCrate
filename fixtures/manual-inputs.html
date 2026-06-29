@@ -16,21 +16,28 @@
       }
       textarea,
       input[type="text"],
-      #editable {
+      #editable,
+      #shadow-host {
         width: 100%;
         box-sizing: border-box;
         padding: 8px;
         font-size: 14px;
       }
-      #editable {
+      #editable,
+      #shadow-host {
         min-height: 80px;
+        border: 1px solid #888;
+      }
+      iframe {
+        width: 100%;
+        height: 130px;
         border: 1px solid #888;
       }
     </style>
   </head>
   <body>
     <h1>PromptCrate 手动输入测试页</h1>
-    <p>聚焦下列任意输入框，按快捷键打开模板菜单，验证三类插入目标。</p>
+    <p>聚焦下列任意输入框，按快捷键打开模板菜单，验证常见插入目标。</p>
 
     <fieldset>
       <legend>textarea</legend>
@@ -46,5 +53,43 @@
       <legend>contenteditable</legend>
       <div id="editable" contenteditable="true"></div>
     </fieldset>
+
+    <fieldset>
+      <legend>open Shadow DOM input</legend>
+      <div id="shadow-host"></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>same-origin iframe input</legend>
+      <iframe
+        id="iframe-input"
+        title="PromptCrate iframe input fixture"
+        srcdoc='<!doctype html><html><body><label style="display:grid;gap:8px;font-family:system-ui,sans-serif;">iframe textarea<textarea id="iframe-textarea" style="min-height:70px;"></textarea></label></body></html>'
+      ></iframe>
+    </fieldset>
+
+    <script>
+      const shadowHost = document.getElementById("shadow-host");
+      const shadowRoot = shadowHost.attachShadow({ mode: "open" });
+      shadowRoot.innerHTML = `
+        <style>
+          label {
+            display: grid;
+            gap: 8px;
+            font-family: system-ui, sans-serif;
+          }
+          input {
+            box-sizing: border-box;
+            width: 100%;
+            padding: 8px;
+            font-size: 14px;
+          }
+        </style>
+        <label>
+          Shadow input
+          <input id="shadow-input" type="text" />
+        </label>
+      `;
+    </script>
   </body>
 </html>

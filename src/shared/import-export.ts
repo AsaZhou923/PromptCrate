@@ -1,4 +1,5 @@
 import {
+  findDuplicateTemplateIds,
   isPromptTemplate,
   normalizeTemplate,
   PromptTemplate,
@@ -84,14 +85,36 @@ export function parseTemplateImportJson(rawJson: string): ImportParseResult {
     };
   }
 
-  const invalidIndex = payload.templates.findIndex(
-    (template) => !isPromptTemplate(template) || validateTemplate(template).length > 0,
+  const normalizedTemplates: PromptTemplate[] = [];
+
+  for (const template of payload.templates) {
+    if (!isPromptTemplate(template)) {
+      return {
+        ok: false,
+        error: `Template at index ${normalizedTemplates.length + 1} is invalid.`,
+      };
+    }
+
+    normalizedTemplates.push(normalizeTemplate(template));
+  }
+
+  const invalidIndex = normalizedTemplates.findIndex(
+    (template) => validateTemplate(template).length > 0,
   );
 
   if (invalidIndex !== -1) {
     return {
       ok: false,
       error: `Template at index ${invalidIndex + 1} is invalid.`,
+    };
+  }
+
+  const duplicateIds = findDuplicateTemplateIds(normalizedTemplates);
+
+  if (duplicateIds.length > 0) {
+    return {
+      ok: false,
+      error: `Import file contains duplicate template id: ${duplicateIds[0]}.`,
     };
   }
 
@@ -102,7 +125,7 @@ export function parseTemplateImportJson(rawJson: string): ImportParseResult {
       exportedAt: typeof payload.exportedAt === "string"
         ? payload.exportedAt
         : new Date().toISOString(),
-      templates: payload.templates.map((template) => normalizeTemplate(template)),
+      templates: normalizedTemplates,
     },
   };
 }

@@ -1,6 +1,7 @@
 export const STORAGE_SCHEMA_VERSION = 1;
 
 export const STORAGE_KEYS = {
+  invalidTemplatesBackup: "promptCrate.invalidTemplatesBackup",
   schemaVersion: "promptCrate.schemaVersion",
   templates: "promptCrate.templates",
 } as const;
@@ -25,6 +26,16 @@ export type TemplateValidationError = {
   field: keyof PromptTemplate | "variables";
   message: string;
 };
+
+export type TemplateCollectionValidationResult =
+  | {
+      ok: true;
+      templates: PromptTemplate[];
+    }
+  | {
+      ok: false;
+      error: string;
+    };
 
 type DefaultTemplateSeed = Omit<
   PromptTemplate,
@@ -162,6 +173,55 @@ export function validateTemplate(template: PromptTemplate): TemplateValidationEr
   return errors;
 }
 
+export function validateTemplateCollection(
+  templates: PromptTemplate[],
+  now = new Date().toISOString(),
+): TemplateCollectionValidationResult {
+  const normalizedTemplates = templates.map((template) =>
+    normalizeTemplate(template, template.updatedAt || now),
+  );
+
+  const invalidIndex = normalizedTemplates.findIndex(
+    (template) => validateTemplate(template).length > 0,
+  );
+
+  if (invalidIndex !== -1) {
+    return {
+      ok: false,
+      error: `Template at index ${invalidIndex + 1} is invalid.`,
+    };
+  }
+
+  const duplicateIds = findDuplicateTemplateIds(normalizedTemplates);
+
+  if (duplicateIds.length > 0) {
+    return {
+      ok: false,
+      error: `Duplicate template id: ${duplicateIds[0]}.`,
+    };
+  }
+
+  return {
+    ok: true,
+    templates: normalizedTemplates,
+  };
+}
+
+export function findDuplicateTemplateIds(templates: PromptTemplate[]): string[] {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+
+  for (const template of templates) {
+    if (seen.has(template.id)) {
+      duplicates.add(template.id);
+    } else {
+      seen.add(template.id);
+    }
+  }
+
+  return [...duplicates];
+}
+
 export function isPromptTemplate(value: unknown): value is PromptTemplate {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -189,7 +249,7 @@ export function normalizeTemplate(
     ...template,
     id: template.id.trim(),
     title: template.title.trim(),
-    body: template.body.trim(),
+    body: template.body,
     tags: normalizeTags(template.tags),
     isFavorite: Boolean(template.isFavorite),
     createdAt: template.createdAt || now,
