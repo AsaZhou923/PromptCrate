@@ -2,16 +2,18 @@ import { describe, expect, it } from "vitest";
 import {
   detectFocusedInsertTarget,
   selectPromptMenuFrameIds,
+  type FrameProbeResult,
 } from "../../src/background/frame-targeting";
 
 describe("prompt menu frame targeting", () => {
   it("targets frames with a focused insert field", () => {
-    expect(
-      selectPromptMenuFrameIds([
-        { frameId: 0, result: { hasFocusedInsertTarget: false } },
-        { frameId: 12, result: { hasFocusedInsertTarget: true } },
-      ]),
-    ).toEqual([12]);
+    const results: FrameProbeResult[] = [
+      { frameId: 0, result: { hasFocusedInsertTarget: false } },
+      { frameId: 12, result: { hasFocusedInsertTarget: true } },
+      { frameId: 12, result: { hasFocusedInsertTarget: true } },
+    ];
+
+    expect(selectPromptMenuFrameIds(results)).toEqual([12]);
   });
 
   it("falls back to the top frame when no focused insert field is found", () => {

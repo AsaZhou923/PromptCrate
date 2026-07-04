@@ -85,7 +85,7 @@ export function createSelectionTracker(rootDocument: Document = document) {
   }
 
   function rememberCurrentSelection(): SavedSelection | null {
-    const activeTarget = findInsertTarget(rootDocument.activeElement);
+    const activeTarget = findInsertTarget(getDeepActiveElement(rootDocument));
     return rememberTarget(activeTarget);
   }
 
@@ -125,6 +125,16 @@ export function createSelectionTracker(rootDocument: Document = document) {
       rootDocument.removeEventListener("mouseup", handlePointerOrKey, true);
     },
   };
+}
+
+function getDeepActiveElement(rootDocument: Document): Element | null {
+  let activeElement = rootDocument.activeElement;
+
+  while (activeElement?.shadowRoot?.activeElement) {
+    activeElement = activeElement.shadowRoot.activeElement;
+  }
+
+  return activeElement;
 }
 
 export function insertTextAtSavedSelection(

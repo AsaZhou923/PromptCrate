@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 describe("manual smoke fixture", () => {
-  it("contains native, shadow DOM, and iframe insertion targets", () => {
+  it("contains the manual insertion targets required by the release checklist", () => {
     const html = readFileSync(
       resolve(process.cwd(), "fixtures/manual-inputs.html"),
       "utf8",
@@ -12,10 +12,13 @@ describe("manual smoke fixture", () => {
 
     expect(document.querySelector("textarea#textarea")).not.toBeNull();
     expect(document.querySelector('input#text-input[type="text"]')).not.toBeNull();
+    expect(document.querySelector('input#search-input[type="search"]')).not.toBeNull();
     expect(document.querySelector('[contenteditable="true"]')).not.toBeNull();
     expect(document.querySelector("#shadow-host")).not.toBeNull();
     expect(document.querySelector("iframe#iframe-input")).not.toBeNull();
     expect(html).toContain('id="shadow-input"');
     expect(html).toContain('id="iframe-textarea"');
+    expect(document.querySelector("textarea#long-textarea")).not.toBeNull();
+    expect(document.querySelector('input#prefilled-input[value="Existing content"]')).not.toBeNull();
   });
 });

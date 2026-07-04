@@ -5,7 +5,7 @@ import tseslint from "typescript-eslint";
 // 只用推荐规则集，保持 Phase 0 简单，后续再按需收敛。
 export default tseslint.config(
   {
-    ignores: ["dist/**", "node_modules/**", "release/**"],
+    ignores: ["dist/**", "node_modules/**", "output/**", "release/**"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -25,6 +25,7 @@ export default tseslint.config(
       "vite.config.ts",
       "vite.content.config.ts",
       "vitest.config.ts",
+      "playwright.config.ts",
       "eslint.config.js",
     ],
     languageOptions: {

@@ -59,9 +59,42 @@ if (!window.__promptCrateContentEntryLoaded) {
     }
   });
 
-  window.addEventListener("promptcrate:open-menu", () => {
+  window.addEventListener("promptcrate:open-menu", (event) => {
+    focusRequestedTarget(event);
     void openPromptMenu();
   });
+
+  function focusRequestedTarget(event: Event): void {
+    const selector = (
+      event as Event & { detail?: { focusSelector?: unknown } | null }
+    ).detail?.focusSelector;
+
+    if (typeof selector !== "string") {
+      return;
+    }
+
+    const target = document.querySelector(selector);
+
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+
+    target.focus();
+
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+      target.setSelectionRange(target.value.length, target.value.length);
+      return;
+    }
+
+    if (target.isContentEditable) {
+      const range = document.createRange();
+      range.selectNodeContents(target);
+      range.collapse(false);
+      const selection = document.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    }
+  }
 
   async function openPromptMenu(): Promise<void> {
     selectionTracker.rememberCurrentSelection();

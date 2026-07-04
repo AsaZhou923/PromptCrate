@@ -27,4 +27,9 @@ describe("extension manifest", () => {
       expect(RESERVED_SHORTCUTS.has(shortcut)).toBe(false);
     }
   });
+
+  it("keeps permissions limited to the documented local-first surface", () => {
+    expect(manifest.permissions).toEqual(["activeTab", "scripting", "storage"]);
+    expect(manifest).not.toHaveProperty("host_permissions");
+  });
 });

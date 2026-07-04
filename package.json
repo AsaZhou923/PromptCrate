@@ -10,6 +10,9 @@
     "build:content": "vite build --config vite.content.config.ts",
     "build:extension": "vite build",
     "test": "vitest run",
+    "test:e2e": "pnpm build && playwright test --grep-invert @real",
+    "test:e2e:full": "pnpm build && playwright test",
+    "test:e2e:install": "playwright install chromium",
     "test:watch": "vitest",
     "lint": "eslint .",
     "check": "tsc --noEmit && tsc -p tsconfig.node.json --noEmit",
@@ -22,6 +25,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.14.0",
+    "@playwright/test": "1.61.1",
     "@types/chrome": "^0.0.287",
     "@types/node": "^22.9.0",
     "@types/react": "^18.3.12",
@@ -31,7 +35,7 @@
     "jsdom": "^25.0.1",
     "typescript": "^5.6.3",
     "typescript-eslint": "^8.15.0",
-    "vite": "^8.1.0",
+    "vite": "^8.1.3",
     "vite-plugin-static-copy": "^4.1.1",
     "vitest": "^4.1.9"
   }
