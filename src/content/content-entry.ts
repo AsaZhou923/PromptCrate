@@ -82,7 +82,9 @@ if (!window.__promptCrateContentEntryLoaded) {
     target.focus();
 
     if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
-      target.setSelectionRange(target.value.length, target.value.length);
+      if (target.selectionStart !== null && target.selectionEnd !== null) {
+        target.setSelectionRange(target.value.length, target.value.length);
+      }
       return;
     }
 
@@ -110,7 +112,7 @@ if (!window.__promptCrateContentEntryLoaded) {
       savedSelection,
       chosenTemplate: null,
       values: {},
-      error: savedSelection ? null : "Focus a text field before opening PromptCrate.",
+      error: savedSelection ? null : "Focus a text field before opening PromptCrate. Read-only and disabled fields are not supported.",
     };
 
     attachOutsideClickHandler(host);
@@ -261,6 +263,10 @@ if (!window.__promptCrateContentEntryLoaded) {
 
     const wrapper = document.createElement("div");
     wrapper.className = "list-view";
+
+    if (state.error) {
+      wrapper.append(createNotice(state.error, "error"));
+    }
 
     const searchInput = document.createElement("input");
     searchInput.className = "search";
