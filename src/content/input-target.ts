@@ -29,11 +29,13 @@ export function isTextControlTarget(
   element: EventTarget | null,
 ): element is TextControlTarget {
   if (element instanceof HTMLTextAreaElement) {
-    return true;
+    return !element.readOnly && !element.matches(":disabled");
   }
 
   return (
     element instanceof HTMLInputElement &&
+    !element.readOnly &&
+    !element.matches(":disabled") &&
     TEXT_INPUT_TYPES.has(element.type.toLocaleLowerCase())
   );
 }
@@ -51,8 +53,8 @@ export function findEditableTarget(element: EventTarget | null): EditableTarget 
 }
 
 export function findInsertTarget(element: EventTarget | null): InsertTarget | null {
-  if (isTextControlTarget(element)) {
-    return element;
+  if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+    return isTextControlTarget(element) ? element : null;
   }
 
   return findEditableTarget(element);
@@ -85,7 +87,14 @@ export function createSelectionTracker(rootDocument: Document = document) {
   }
 
   function rememberCurrentSelection(): SavedSelection | null {
-    const activeTarget = findInsertTarget(getDeepActiveElement(rootDocument));
+    const activeElement = getDeepActiveElement(rootDocument);
+    const activeTarget = findInsertTarget(activeElement);
+    if (
+      !activeTarget &&
+      (activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement)
+    ) {
+      savedSelection = null;
+    }
     return rememberTarget(activeTarget);
   }
 
@@ -98,8 +107,8 @@ export function createSelectionTracker(rootDocument: Document = document) {
     return rememberCurrentSelection();
   }
 
-  function handleFocusIn(event: FocusEvent): void {
-    rememberTarget(findInsertTarget(event.target));
+  function handleFocusIn(): void {
+    rememberCurrentSelection();
   }
 
   function handleSelectionChange(): void {
@@ -157,13 +166,28 @@ function insertIntoTextControl(
   text: string,
 ): boolean {
   const { target } = savedSelection;
+  if (!isTextControlTarget(target)) {
+    return false;
+  }
+
   const originalValue = target.value;
-  const start = clampSelectionIndex(savedSelection.start, originalValue.length);
-  const end = clampSelectionIndex(savedSelection.end, originalValue.length);
+  const supportsSelection = target.selectionStart !== null && target.selectionEnd !== null;
+  // Email inputs have no selection API, so append instead of guessing a caret position.
+  const start = supportsSelection
+    ? clampSelectionIndex(savedSelection.start, originalValue.length)
+    : originalValue.length;
+  const end = supportsSelection
+    ? clampSelectionIndex(savedSelection.end, originalValue.length)
+    : originalValue.length;
 
   try {
     target.focus();
-    if (!dispatchBeforeInputEvent(target, text)) {
+    if (
+      !isTextControlTarget(target) ||
+      !dispatchBeforeInputEvent(target, text) ||
+      !isTextControlTarget(target) ||
+      !isConnected(target)
+    ) {
       return false;
     }
 
@@ -172,7 +196,9 @@ function insertIntoTextControl(
       `${originalValue.slice(0, start)}${text}${originalValue.slice(end)}`,
     );
     const nextCaret = start + text.length;
-    target.setSelectionRange(nextCaret, nextCaret);
+    if (supportsSelection) {
+      target.setSelectionRange(nextCaret, nextCaret);
+    }
     dispatchInputEvent(target, text);
     return true;
   } catch {
@@ -292,12 +318,14 @@ function dispatchBeforeInputEvent(target: InsertTarget, text: string): boolean {
   const event = typeof InputEvent === "function"
     ? new InputEvent("beforeinput", {
         bubbles: true,
+        composed: true,
         cancelable: true,
         inputType: "insertText",
         data: text,
       })
     : new Event("beforeinput", {
         bubbles: true,
+        composed: true,
         cancelable: true,
       });
 
@@ -308,10 +336,11 @@ function dispatchInputEvent(target: InsertTarget, text: string): void {
   const event = typeof InputEvent === "function"
     ? new InputEvent("input", {
         bubbles: true,
+        composed: true,
         inputType: "insertText",
         data: text,
       })
-    : new Event("input", { bubbles: true });
+    : new Event("input", { bubbles: true, composed: true });
 
   target.dispatchEvent(event);
 }

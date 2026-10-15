@@ -39,14 +39,15 @@ export function detectFocusedInsertTarget(): FocusedInsertProbe {
     }
 
     if (element instanceof HTMLTextAreaElement) {
-      return true;
+      return !element.readOnly && !element.matches(":disabled");
     }
 
-    if (
-      element instanceof HTMLInputElement &&
-      textInputTypes.has(element.type.toLocaleLowerCase())
-    ) {
-      return true;
+    if (element instanceof HTMLInputElement) {
+      return (
+        !element.readOnly &&
+        !element.matches(":disabled") &&
+        textInputTypes.has(element.type.toLocaleLowerCase())
+      );
     }
 
     return Boolean(

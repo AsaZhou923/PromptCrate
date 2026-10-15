@@ -189,6 +189,182 @@ test("inserts templates into fixture textarea, input, contenteditable, Shadow DO
   }
 });
 
+test("appends plain and variable templates to email inputs without selection APIs", async (
+  { browserName },
+  testInfo,
+) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-email"));
+
+  try {
+    await resetExtensionStorage(app.extensionId, app.context);
+    const page = await app.context.newPage();
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    await primePromptCrateContentScript(page, app);
+    await page.evaluate(() => {
+      const input = document.createElement("input");
+      input.id = "email-regression";
+      input.type = "email";
+      input.addEventListener("input", () => {
+        input.dataset.inputCount = String(Number(input.dataset.inputCount ?? 0) + 1);
+      });
+      document.body.prepend(input);
+    });
+
+    const scenarios: Array<{ title: string; values: Record<string, string>; inserted: string }> = [
+      {
+        title: "Summarize page",
+        values: {},
+        inserted: "Summarize the key ideas from this page in concise bullets.",
+      },
+      {
+        title: "Rewrite clearer",
+        values: { text: "Email variable" },
+        inserted: "Rewrite the following text so it is clearer, shorter, and keeps the original meaning:Email variable",
+      },
+    ];
+    for (const scenario of scenarios) {
+      const target = page.locator("#email-regression");
+      await target.evaluate((element) => {
+        const input = element as HTMLInputElement;
+        input.value = "original@example.com";
+        input.dataset.inputCount = "0";
+        input.focus();
+      });
+      await openPromptMenu(page, page, app);
+      await insertTemplateFromMenu(page, scenario.title, scenario.values);
+      await expect(target).toHaveValue(`original@example.com${scenario.inserted}`);
+      await expect(target).toHaveAttribute("data-input-count", "1");
+    }
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("rejects readonly controls and controls made readonly or disabled while the menu is open", async (
+  { browserName },
+  testInfo,
+) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-noneditable"));
+
+  try {
+    await resetExtensionStorage(app.extensionId, app.context);
+    const page = await app.context.newPage();
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    await primePromptCrateContentScript(page, app);
+
+    for (const tag of ["input", "textarea"] as const) {
+      await page.evaluate((tagName) => {
+        document.getElementById("noneditable-regression")?.remove();
+        const target = document.createElement(tagName);
+        target.id = "noneditable-regression";
+        target.value = "Original value";
+        target.readOnly = true;
+        target.dataset.inputCount = "0";
+        target.addEventListener("input", () => {
+          target.dataset.inputCount = String(Number(target.dataset.inputCount) + 1);
+        });
+        document.body.prepend(target);
+        target.focus();
+      }, tag);
+      const target = page.locator("#noneditable-regression");
+      await openPromptMenu(page, page, app);
+      await expectMenuText(page).toContain("Focus a text field before opening PromptCrate.");
+      await expect(target).toHaveValue("Original value");
+      await expect(target).toHaveAttribute("data-input-count", "0");
+      await clickMenuButton(page, "Close");
+      await waitForMenuClosed(page);
+
+      for (const property of ["readOnly", "disabled"] as const) {
+        await target.evaluate((element) => {
+          const control = element as HTMLInputElement | HTMLTextAreaElement;
+          control.readOnly = false;
+          control.disabled = false;
+          control.focus();
+          control.setSelectionRange(control.value.length, control.value.length);
+        });
+        await openPromptMenu(page, page, app);
+        await target.evaluate((element, key) => {
+          (element as HTMLInputElement | HTMLTextAreaElement)[key] = true;
+        }, property);
+        await chooseTemplateFromMenu(page, "Summarize page");
+        await expectMenuText(page).toContain("PromptCrate could not insert into this field.");
+        await expect(target).toHaveValue("Original value");
+        await expect(target).toHaveAttribute("data-input-count", "0");
+        await clickMenuButton(page, "Close");
+        await waitForMenuClosed(page);
+      }
+    }
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("composes Shadow DOM insertion events and honors document beforeinput cancellation", async (
+  { browserName },
+  testInfo,
+) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-shadow-events"));
+
+  try {
+    await resetExtensionStorage(app.extensionId, app.context);
+    const page = await app.context.newPage();
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    await primePromptCrateContentScript(page, app);
+    await page.evaluate(() => {
+      const host = document.getElementById("shadow-host")!;
+      const input = host.shadowRoot!.querySelector<HTMLInputElement>("#shadow-input")!;
+      for (const [scope, target] of [["host", host], ["document", document]] as const) {
+        for (const type of ["beforeinput", "input"]) {
+          target.addEventListener(type, (event) => {
+            if (event.composedPath().includes(input)) {
+              host.setAttribute(`data-${scope}-events`,
+                `${host.getAttribute(`data-${scope}-events`) ?? ""}${type}:${event.composed}|`);
+              if (scope === "document" && type === "beforeinput" && host.dataset.cancel === "true") {
+                event.preventDefault();
+              }
+            }
+          });
+        }
+      }
+    });
+
+    for (const cancel of [false, true]) {
+      await page.evaluate((shouldCancel) => {
+        const host = document.getElementById("shadow-host")!;
+        host.setAttribute("data-host-events", "");
+        host.setAttribute("data-document-events", "");
+        host.dataset.cancel = String(shouldCancel);
+        const input = host.shadowRoot!.querySelector<HTMLInputElement>("#shadow-input")!;
+        input.value = "Shadow ";
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+      }, cancel);
+      await openPromptMenu(page, page, app);
+      await chooseTemplateFromMenu(page, "Summarize page");
+      if (cancel) {
+        await expectMenuText(page).toContain("PromptCrate could not insert into this field.");
+      } else {
+        await waitForMenuClosed(page);
+      }
+      await expect(page.locator("#shadow-input")).toHaveValue(cancel
+        ? "Shadow "
+        : "Shadow Summarize the key ideas from this page in concise bullets.");
+      const events = cancel ? "beforeinput:true|" : "beforeinput:true|input:true|";
+      await expect(page.locator("#shadow-host")).toHaveAttribute("data-host-events", events);
+      await expect(page.locator("#shadow-host")).toHaveAttribute("data-document-events", events);
+      if (cancel) {
+        await clickMenuButton(page, "Close");
+        await waitForMenuClosed(page);
+      }
+    }
+  } finally {
+    await app.context.close();
+  }
+});
+
 test("manages templates through Options CRUD, import, export, and persistence", async (
   { browserName },
   testInfo,
@@ -751,23 +927,7 @@ async function insertTemplateFromMenu(
   title: string,
   values: Record<string, string> = {},
 ): Promise<void> {
-  await fillMenuSearch(scope, title);
-  await scope.evaluate(
-    ({ hostId, templateTitle }) => {
-      const shadow = document.getElementById(hostId)?.shadowRoot;
-      const item = [...(shadow?.querySelectorAll<HTMLElement>(".template-item") ?? [])]
-        .find((candidate) =>
-          candidate.querySelector(".template-title")?.textContent?.includes(templateTitle),
-        );
-
-      if (!item) {
-        throw new Error(`Template not found: ${templateTitle}`);
-      }
-
-      item.click();
-    },
-    { hostId: extensionHostId, templateTitle: title },
-  );
+  await chooseTemplateFromMenu(scope, title);
 
   if (Object.keys(values).length === 0) {
     await waitForMenuClosed(scope);
@@ -801,6 +961,26 @@ async function insertTemplateFromMenu(
 
   await clickMenuButton(scope, "Insert");
   await waitForMenuClosed(scope);
+}
+
+async function chooseTemplateFromMenu(scope: BrowserScope, title: string): Promise<void> {
+  await fillMenuSearch(scope, title);
+  await scope.evaluate(
+    ({ hostId, templateTitle }) => {
+      const shadow = document.getElementById(hostId)?.shadowRoot;
+      const item = [...(shadow?.querySelectorAll<HTMLElement>(".template-item") ?? [])]
+        .find((candidate) =>
+          candidate.querySelector(".template-title")?.textContent?.includes(templateTitle),
+        );
+
+      if (!item) {
+        throw new Error(`Template not found: ${templateTitle}`);
+      }
+
+      item.click();
+    },
+    { hostId: extensionHostId, templateTitle: title },
+  );
 }
 
 async function fillMenuSearch(scope: BrowserScope, value: string): Promise<void> {

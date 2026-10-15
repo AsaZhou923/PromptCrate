@@ -66,6 +66,8 @@ PromptCrate 是一个 **Manifest V3** 浏览器扩展。它解决一个具体的
 4. 如果模板包含 `{{变量名}}`，填写变量表单。
 5. 点击 Insert，模板会插入到原光标位置。
 
+只读或禁用的输入框不支持插入；菜单打开后字段变为只读或禁用时也会拒绝写入。`input[type=email]` 不提供光标选区 API，因此模板会追加到已有内容末尾。open Shadow DOM 中的 `beforeinput` / `input` 事件可传到宿主页面，页面可通过取消 `beforeinput` 阻止插入。
+
 ### 管理模板
 
 在 Chrome 扩展详情页打开 PromptCrate options，可以：
