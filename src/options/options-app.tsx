@@ -82,6 +82,11 @@ function OptionsApp() {
 
     const now = new Date().toISOString();
     const existing = selectedTemplate;
+    if (selectedId && !existing) {
+      setError("Selected template no longer exists. Select a template or create a new one.");
+      return;
+    }
+
     const candidate = normalizeTemplate({
       id: form.id || createTemplateId(form.title),
       title: form.title,
@@ -115,7 +120,9 @@ function OptionsApp() {
         )
       : [...templates, candidate];
 
-    await persistTemplates(nextTemplates, `Saved "${candidate.title}".`);
+    if (!await persistTemplates(nextTemplates, `Saved "${candidate.title}".`)) {
+      return;
+    }
     setSelectedId(candidate.id);
     setForm(templateToForm(candidate));
   }
@@ -130,7 +137,9 @@ function OptionsApp() {
     }
 
     const nextTemplates = templates.filter((template) => template.id !== selectedTemplate.id);
-    await persistTemplates(nextTemplates, `Deleted "${selectedTemplate.title}".`);
+    if (!await persistTemplates(nextTemplates, `Deleted "${selectedTemplate.title}".`)) {
+      return;
+    }
     setSelectedId(null);
     setForm(EMPTY_FORM);
   }
@@ -152,7 +161,9 @@ function OptionsApp() {
     };
     const nextTemplates = [...templates, copy];
 
-    await persistTemplates(nextTemplates, `Copied "${selectedTemplate.title}".`);
+    if (!await persistTemplates(nextTemplates, `Copied "${selectedTemplate.title}".`)) {
+      return;
+    }
     setSelectedId(copy.id);
     setForm(templateToForm(copy));
   }
@@ -168,7 +179,9 @@ function OptionsApp() {
         : item,
     );
 
-    await persistTemplates(nextTemplates, "Favorite updated.");
+    if (!await persistTemplates(nextTemplates, "Favorite updated.")) {
+      return;
+    }
 
     if (selectedId === template.id) {
       setForm((currentForm) => ({
@@ -225,19 +238,26 @@ function OptionsApp() {
     }
 
     const result = applyTemplateImport(templates, pendingImport.templates, mode);
-    await persistTemplates(
+    const imported = await persistTemplates(
       result.templates,
       result.overwritten
         ? `Imported ${result.added} templates by overwrite.`
         : `Imported ${result.added} new and ${result.updated} updated templates.`,
     );
+    if (!imported) {
+      return;
+    }
+
+    const nextSelectedTemplate = result.templates.find((template) => template.id === selectedId);
+    setSelectedId(nextSelectedTemplate?.id ?? null);
+    setForm(nextSelectedTemplate ? templateToForm(nextSelectedTemplate) : EMPTY_FORM);
     setPendingImport(null);
   }
 
   async function persistTemplates(
     nextTemplates: PromptTemplate[],
     message: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     setError(null);
 
     try {
@@ -245,9 +265,11 @@ function OptionsApp() {
       setTemplates(nextTemplates);
       setStatus(message);
       await notifyTemplatesUpdated();
+      return true;
     } catch (caughtError) {
       setError(getErrorMessage(caughtError));
       setStatus("Save failed.");
+      return false;
     }
   }
 

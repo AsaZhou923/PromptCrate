@@ -482,6 +482,371 @@ test("manages templates through Options CRUD, import, export, and persistence", 
   }
 });
 
+
+test("overwrite clears a removed selection and saving afterwards creates a persisted template", async (
+  { browserName },
+  testInfo,
+) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-import-removed"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    await options.getByRole("button", { name: /Rewrite clearer/ }).click();
+    const originalBody = await options.getByLabel("Body").inputValue();
+    const importPath = testInfo.outputPath("replacement.json");
+    await writeImportFile(importPath, [
+      createTemplate("replacement", "Replacement", "Imported replacement body", ["imported"]),
+    ]);
+    await options.locator('input[type="file"]').setInputFiles(importPath);
+    await expect(options.getByRole("button", { name: "Overwrite" })).toBeVisible();
+
+    options.once("dialog", (dialog) => { void dialog.dismiss(); });
+    await options.getByRole("button", { name: "Overwrite" }).click();
+    await expect(options.getByLabel("ID")).toHaveValue("rewrite-clearer");
+    await expect(options.getByLabel("Body")).toHaveValue(originalBody);
+    expect(await readTemplates(options)).toHaveLength(7);
+    await expect(options.getByRole("button", { name: "Overwrite" })).toBeVisible();
+
+    options.once("dialog", (dialog) => { void dialog.accept(); });
+    await options.getByRole("button", { name: "Overwrite" }).click();
+    await expect(options.locator(".status")).toContainText("Imported 1 templates by overwrite.");
+    await expect(options.getByRole("heading", { name: "New template" })).toBeVisible();
+    for (const label of ["ID", "Title", "Body", "Tags"]) {
+      await expect(options.getByLabel(label, { exact: true })).toHaveValue("");
+    }
+    await expect(options.getByLabel("Favorite", { exact: true })).not.toBeChecked();
+    await expect(options.locator(".template-row.selected")).toHaveCount(0);
+
+    await options.getByLabel("Title").fill("Save after overwrite");
+    await options.getByLabel("Body").fill("This must not be lost");
+    await options.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(options.locator(".status")).toContainText('Saved "Save after overwrite".');
+    expect(await readTemplates(options)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "replacement", body: "Imported replacement body" }),
+      expect.objectContaining({ id: "save-after-overwrite", body: "This must not be lost" }),
+    ]));
+    await options.reload();
+    await expect(options.locator(".status")).toContainText("2 templates loaded.");
+    await options.getByRole("button", { name: /Save after overwrite/ }).click();
+    await expect(options.getByLabel("Body")).toHaveValue("This must not be lost");
+  } finally {
+    await app.context.close();
+  }
+});
+
+for (const mode of ["Merge", "Overwrite"] as const) {
+  test(mode + " refreshes every field for the selected ID before the next save", async (
+    { browserName },
+    testInfo,
+  ) => {
+    expect(browserName).toBe("chromium");
+    const app = await launchPromptCrate(testInfo.outputPath("profile-import-same-id"));
+    try {
+      const options = await resetExtensionStorage(app.extensionId, app.context);
+      await options.getByRole("button", { name: /Rewrite clearer/ }).click();
+      const imported = {
+        ...createTemplate("rewrite-clearer", "Imported title", "Imported body", ["new", "tags"]),
+        isFavorite: true,
+      };
+      const importPath = testInfo.outputPath("same-id.json");
+      await writeImportFile(importPath, [imported]);
+      await options.locator('input[type="file"]').setInputFiles(importPath);
+      await expect(options.getByRole("button", { name: mode })).toBeVisible();
+      if (mode === "Overwrite") {
+        options.once("dialog", (dialog) => { void dialog.accept(); });
+      }
+      await options.getByRole("button", { name: mode }).click();
+      await expect(options.locator(".status")).toContainText("Imported");
+      await expect(options.getByRole("heading", { name: "Edit template" })).toBeVisible();
+      await expect(options.getByLabel("ID")).toHaveValue(imported.id);
+      await expect(options.getByLabel("Title")).toHaveValue(imported.title);
+      await expect(options.getByLabel("Body")).toHaveValue(imported.body);
+      await expect(options.getByLabel("Tags")).toHaveValue("new, tags");
+      await expect(options.getByLabel("Favorite", { exact: true })).toBeChecked();
+
+      await options.getByLabel("Tags").fill("edited");
+      await options.getByRole("button", { name: "Save", exact: true }).click();
+      await expect(options.locator(".status")).toContainText('Saved "Imported title".');
+      const saved = (await readTemplates(options)).find((item) => item.id === imported.id);
+      expect(saved).toMatchObject({ ...imported, tags: ["edited"], updatedAt: expect.any(String) });
+      await options.reload();
+      await expect(options.locator(".status")).toContainText("templates loaded.");
+      await options.getByRole("button", { name: /Imported title/ }).click();
+      await expect(options.getByLabel("Body")).toHaveValue(imported.body);
+      await expect(options.getByLabel("Tags")).toHaveValue("edited");
+    } finally {
+      await app.context.close();
+    }
+  });
+}
+
+test("a failed import preserves the editor and pending import for retry", async (
+  { browserName },
+  testInfo,
+) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-import-failure"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    await options.getByRole("button", { name: /Rewrite clearer/ }).click();
+    const before = await readTemplates(options);
+    const originalBody = await options.getByLabel("Body").inputValue();
+    const importPath = testInfo.outputPath("failed-import.json");
+    await writeImportFile(importPath, [
+      createTemplate("rewrite-clearer", "Retry title", "Retry body", []),
+    ]);
+    await options.locator('input[type="file"]').setInputFiles(importPath);
+    await expect(options.getByRole("button", { name: "Merge" })).toBeVisible();
+    await options.evaluate(() => {
+      const originalSet = chrome.storage.local.set;
+      chrome.storage.local.set = (() => Promise.reject(new Error("Test storage failure"))) as typeof chrome.storage.local.set;
+      window.addEventListener("promptcrate:test-restore-storage", () => {
+        chrome.storage.local.set = originalSet;
+      }, { once: true });
+    });
+
+    await options.getByRole("button", { name: "Merge" }).click();
+    await expect(options.locator(".status.error")).toContainText("Test storage failure");
+    await expect(options.getByRole("button", { name: "Merge" })).toBeVisible();
+    await expect(options.getByLabel("ID")).toHaveValue("rewrite-clearer");
+    await expect(options.getByLabel("Title")).toHaveValue("Rewrite clearer");
+    await expect(options.getByLabel("Body")).toHaveValue(originalBody);
+    expect(await readTemplates(options)).toEqual(before);
+
+    await options.evaluate(() => window.dispatchEvent(new Event("promptcrate:test-restore-storage")));
+    await options.getByRole("button", { name: "Merge" }).click();
+    await expect(options.locator(".status")).toContainText("Imported 0 new and 1 updated templates.");
+    await expect(options.getByLabel("Title")).toHaveValue("Retry title");
+    await expect(options.getByLabel("Body")).toHaveValue("Retry body");
+    await expect(options.getByRole("button", { name: "Merge" })).toHaveCount(0);
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("repeated opens preserve page selections, search, variable drafts, and Back/Close behavior", async (
+  { browserName },
+  testInfo,
+) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-repeated-open"));
+  try {
+    await resetExtensionStorage(app.extensionId, app.context);
+    const page = await app.context.newPage();
+    await page.goto(staticServer.baseURL + "/fixtures/manual-inputs.html");
+    await primePromptCrateContentScript(page, app);
+    const summary = "Summarize the key ideas from this page in concise bullets.";
+
+    for (const selector of ["#textarea", "#text-input", "#shadow-input"]) {
+      const target = page.locator(selector);
+      await target.evaluate((element) => {
+        const input = element as HTMLInputElement | HTMLTextAreaElement;
+        input.value = "Before REPLACE after";
+        input.focus();
+        input.setSelectionRange(7, 14);
+      });
+      await openPromptMenu(page, page, app);
+      await fillMenuSearch(page, "Summarize");
+      await repeatOpenViaRuntime(page, app, "OPEN_PROMPT_MENU");
+      await repeatOpenViaRuntime(page, app, "REOPEN_MENU");
+      await expect(page.locator("#" + extensionHostId + " input.search")).toHaveValue("Summarize");
+      await insertTemplateFromMenu(page, "Summarize page");
+      await expect(target).toHaveValue("Before " + summary + " after");
+    }
+
+    const target = page.locator("#textarea");
+    await target.evaluate((element) => {
+      const input = element as HTMLTextAreaElement;
+      input.value = "Before REPLACE after";
+      input.focus();
+      input.setSelectionRange(7, 14);
+    });
+    await openPromptMenu(page, page, app);
+    await chooseTemplateFromMenu(page, "Rewrite clearer");
+    const variable = page.locator("#" + extensionHostId + " .variable-form input");
+    await variable.fill("Preserved variable");
+    await repeatOpenViaRuntime(page, app, "REOPEN_MENU");
+    await page.evaluate(() => window.dispatchEvent(new Event("promptcrate:open-menu")));
+    await expect(variable).toHaveValue("Preserved variable");
+    await clickMenuButton(page, "Insert");
+    await waitForMenuClosed(page);
+    await expect(target).toHaveValue(
+      "Before Rewrite the following text so it is clearer, shorter, and keeps the original meaning:\n\nPreserved variable after",
+    );
+
+    await target.evaluate((element) => {
+      const input = element as HTMLTextAreaElement;
+      input.value = "Back REPLACE";
+      input.focus();
+      input.setSelectionRange(5, 12);
+    });
+    await openPromptMenu(page, page, app);
+    await chooseTemplateFromMenu(page, "Rewrite clearer");
+    await variable.fill("Discard on Back");
+    await repeatOpenViaRuntime(page, app, "OPEN_PROMPT_MENU");
+    await clickMenuButton(page, "Back");
+    await repeatOpenViaRuntime(page, app, "REOPEN_MENU");
+    await insertTemplateFromMenu(page, "Summarize page");
+    await expect(target).toHaveValue("Back " + summary);
+
+    await target.focus();
+    await openPromptMenu(page, page, app);
+    await clickMenuButton(page, "Close");
+    await waitForMenuClosed(page);
+    await expect(target).toBeFocused();
+    const nextTarget = page.locator("#text-input");
+    await nextTarget.fill("New target ");
+    await focusEditableAtEnd(nextTarget);
+    await openPromptMenu(page, page, app);
+    await insertTemplateFromMenu(page, "Summarize page");
+    await expect(nextTarget).toHaveValue("New target " + summary);
+    await expect(target).toHaveValue("Back " + summary);
+  } finally {
+    await app.context.close();
+  }
+});
+
+async function repeatOpenViaRuntime(
+  page: Page,
+  app: { context: BrowserContext },
+  messageType: "OPEN_PROMPT_MENU" | "REOPEN_MENU",
+): Promise<void> {
+  const worker = app.context.serviceWorkers()[0] ?? await app.context.waitForEvent("serviceworker");
+  await worker.evaluate(async ({ url, type }) => {
+    const tab = (await chrome.tabs.query({})).find((item) => item.url === url);
+    if (typeof tab?.id !== "number") {
+      throw new Error("Fixture tab not found.");
+    }
+    await chrome.tabs.sendMessage(tab.id, { type });
+  }, { url: page.url(), type: messageType });
+}
+
+test("coalesces opens during loading and ignores a closed menu's delayed read", async (
+  { browserName },
+  testInfo,
+) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-open-loading"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    const page = await app.context.newPage();
+    await page.goto(staticServer.baseURL + "/fixtures/manual-inputs.html");
+    await primePromptCrateContentScript(page, app);
+    const target = page.locator("#textarea");
+    await target.evaluate((element) => {
+      const input = element as HTMLTextAreaElement;
+      input.value = "Before REPLACE";
+      input.focus();
+      input.setSelectionRange(7, 14);
+    });
+    await delayNextContentRead(page, app);
+    await page.evaluate(() => {
+      window.dispatchEvent(new Event("promptcrate:open-menu"));
+      window.dispatchEvent(new Event("promptcrate:open-menu"));
+    });
+    await expect(page.locator("html")).toHaveAttribute("data-promptcrate-read-blocked", "true");
+    await expect(page.locator("html")).toHaveAttribute("data-promptcrate-read-count", "1");
+    await page.evaluate(() => window.dispatchEvent(new Event("promptcrate:test-release-read")));
+    await waitForMenu(page);
+    await insertTemplateFromMenu(page, "Summarize page");
+    await expect(target).toHaveValue("Before Summarize the key ideas from this page in concise bullets.");
+
+    await target.focus();
+    await delayNextContentRead(page, app);
+    await page.evaluate(() => window.dispatchEvent(new Event("promptcrate:open-menu")));
+    await expect(page.locator("html")).toHaveAttribute("data-promptcrate-read-blocked", "true");
+    await page.evaluate(() => {
+      document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    });
+    await waitForMenuClosed(page);
+    const newest = createTemplate("newest", "Newest template", "Newest body", []);
+    await options.evaluate(async (template) => {
+      await chrome.storage.local.set({ "promptCrate.templates": [template] });
+    }, newest);
+    const nextTarget = page.locator("#text-input");
+    await nextTarget.fill("New target ");
+    await focusEditableAtEnd(nextTarget);
+    await openPromptMenu(page, page, app);
+    await expectMenuText(page).toContain("Newest template");
+
+    await page.evaluate(() => window.dispatchEvent(new Event("promptcrate:test-release-read")));
+    await expect(page.locator("html")).not.toHaveAttribute("data-promptcrate-read-blocked", "true");
+    await expectMenuText(page).toContain("Newest template");
+    await insertTemplateFromMenu(page, "Newest template");
+    await expect(nextTarget).toHaveValue("New target Newest body");
+    await expect(target).toHaveValue("Before Summarize the key ideas from this page in concise bullets.");
+
+    await target.focus();
+    await delayNextContentRead(page, app, "fail");
+    await page.evaluate(() => window.dispatchEvent(new Event("promptcrate:open-menu")));
+    await expectMenuText(page).toContain("Could not load templates. Close PromptCrate and try again.");
+    await expectMenuText(page).toContain("Test load failure");
+    await repeatOpenViaRuntime(page, app, "REOPEN_MENU");
+    await expectMenuText(page).toContain("Test load failure");
+    await clickMenuButton(page, "Close");
+    await waitForMenuClosed(page);
+    await expect(target).toBeFocused();
+    await openPromptMenu(page, page, app);
+    await expectMenuText(page).toContain("Newest template");
+    await expect(page.locator("#" + extensionHostId + " .notice.error")).toHaveCount(0);
+    await clickMenuButton(page, "Close");
+    await waitForMenuClosed(page);
+  } finally {
+    await app.context.close();
+  }
+});
+
+async function delayNextContentRead(
+  page: Page,
+  app: { context: BrowserContext },
+  mode: "delay" | "fail" = "delay",
+): Promise<void> {
+  const worker = app.context.serviceWorkers()[0] ?? await app.context.waitForEvent("serviceworker");
+  await worker.evaluate(async ({ url, readMode }) => {
+    const tab = (await chrome.tabs.query({})).find((item) => item.url === url);
+    if (typeof tab?.id !== "number") {
+      throw new Error("Fixture tab not found.");
+    }
+    // Install the gate in the content script's isolated world, not the page world.
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: (readMode: "delay" | "fail") => {
+        const originalGet = chrome.storage.local.get.bind(chrome.storage.local);
+        if (readMode === "fail") {
+          chrome.storage.local.get = (() => {
+            chrome.storage.local.get = originalGet;
+            return Promise.reject(new Error("Test load failure"));
+          }) as typeof chrome.storage.local.get;
+          return;
+        }
+        let first = true;
+        let readCount = 0;
+        document.documentElement.removeAttribute("data-promptcrate-read-blocked");
+        document.documentElement.setAttribute("data-promptcrate-read-count", "0");
+        chrome.storage.local.get = (async (keys: string[]) => {
+          readCount += 1;
+          document.documentElement.setAttribute("data-promptcrate-read-count", String(readCount));
+          const shouldDelay = first;
+          first = false;
+          const result = await originalGet(keys);
+          if (shouldDelay) {
+            await new Promise<void>((resolve) => {
+              window.addEventListener("promptcrate:test-release-read", () => {
+                chrome.storage.local.get = originalGet;
+                document.documentElement.removeAttribute("data-promptcrate-read-blocked");
+                resolve();
+              }, { once: true });
+              document.documentElement.setAttribute("data-promptcrate-read-blocked", "true");
+            });
+          }
+          return result;
+        }) as typeof chrome.storage.local.get;
+      },
+      args: [readMode],
+    });
+  }, { url: page.url(), readMode: mode });
+}
+
 test("real web smoke covers at least three public input surfaces @real", async (
   { browserName },
   testInfo,
@@ -585,7 +950,7 @@ async function launchPromptCrate(userDataDir: string): Promise<{
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: chromeExecutablePath ? undefined : "chromium",
     executablePath: chromeExecutablePath,
-    headless: false,
+    headless: process.env.PROMPTCRATE_E2E_HEADLESS === "1",
     ignoreDefaultArgs: ["--disable-extensions"],
     args: [
       `--disable-extensions-except=${extensionDir}`,
