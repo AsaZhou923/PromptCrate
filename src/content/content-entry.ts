@@ -39,7 +39,10 @@ type MenuState = {
 if (!window.__promptCrateContentEntryLoaded) {
   window.__promptCrateContentEntryLoaded = true;
 
-  const selectionTracker = createSelectionTracker();
+  const selectionTracker = createSelectionTracker(
+    document,
+    (element) => element === document.getElementById(HOST_ID),
+  );
   let state: MenuState | null = null;
 
   chrome.runtime.onMessage.addListener((message: unknown) => {
@@ -99,11 +102,17 @@ if (!window.__promptCrateContentEntryLoaded) {
   }
 
   async function openPromptMenu(): Promise<void> {
+    // Repeated commands keep the original target, query, and unfinished variable values.
+    if (state) {
+      positionHost(state.host);
+      return;
+    }
+
     selectionTracker.rememberCurrentSelection();
     const { host, shadow } = ensureMenuHost();
     const savedSelection = selectionTracker.getSavedSelection();
 
-    state = {
+    const openingState: MenuState = {
       host,
       shadow,
       templates: [],
@@ -115,6 +124,7 @@ if (!window.__promptCrateContentEntryLoaded) {
       error: savedSelection ? null : "Focus a text field before opening PromptCrate. Read-only and disabled fields are not supported.",
     };
 
+    state = openingState;
     attachOutsideClickHandler(host);
     positionHost(host);
 
@@ -123,7 +133,12 @@ if (!window.__promptCrateContentEntryLoaded) {
       return;
     }
 
-    state.templates = sortTemplatesForMenu(await readPromptTemplates());
+    const templates = await readPromptTemplates();
+    // A close or a newer open may have replaced this request while storage was loading.
+    if (state !== openingState) {
+      return;
+    }
+    openingState.templates = sortTemplatesForMenu(templates);
     renderMenu({ focusSearch: true });
   }
 

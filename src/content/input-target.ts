@@ -60,7 +60,10 @@ export function findInsertTarget(element: EventTarget | null): InsertTarget | nu
   return findEditableTarget(element);
 }
 
-export function createSelectionTracker(rootDocument: Document = document) {
+export function createSelectionTracker(
+  rootDocument: Document = document,
+  isIgnoredElement: (element: Element) => boolean = () => false,
+) {
   let savedSelection: SavedSelection | null = null;
 
   function rememberTarget(target: InsertTarget | null): SavedSelection | null {
@@ -88,6 +91,16 @@ export function createSelectionTracker(rootDocument: Document = document) {
 
   function rememberCurrentSelection(): SavedSelection | null {
     const activeElement = getDeepActiveElement(rootDocument);
+    // Ignore extension UI, including descendants in nested shadow roots.
+    let ancestor = activeElement;
+    while (ancestor) {
+      if (isIgnoredElement(ancestor)) {
+        return savedSelection;
+      }
+      const root = ancestor.getRootNode();
+      ancestor = ancestor.parentElement ?? (root instanceof ShadowRoot ? root.host : null);
+    }
+
     const activeTarget = findInsertTarget(activeElement);
     if (
       !activeTarget &&
