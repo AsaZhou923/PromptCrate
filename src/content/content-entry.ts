@@ -133,12 +133,20 @@ if (!window.__promptCrateContentEntryLoaded) {
       return;
     }
 
-    const templates = await readPromptTemplates();
-    // A close or a newer open may have replaced this request while storage was loading.
-    if (state !== openingState) {
-      return;
+    try {
+      const templates = await readPromptTemplates();
+      // A close or a newer open may have replaced this request while storage was loading.
+      if (state !== openingState) {
+        return;
+      }
+      openingState.templates = sortTemplatesForMenu(templates);
+    } catch (error) {
+      if (state !== openingState) {
+        return;
+      }
+      const detail = error instanceof Error ? error.message : String(error);
+      openingState.error = `Could not load templates. Close PromptCrate and try again. ${detail}`;
     }
-    openingState.templates = sortTemplatesForMenu(templates);
     renderMenu({ focusSearch: true });
   }
 

@@ -179,7 +179,8 @@ test("inserts templates into fixture textarea, input, contenteditable, Shadow DO
     await waitForMenuClosed(page);
 
     const screenshotPath = testInfo.outputPath("fixture-final.png");
-    await page.screenshot({ path: screenshotPath, fullPage: true });
+    // Keep diagnostic capture within the viewport for headed Chromium under Xvfb.
+    await page.screenshot({ path: screenshotPath });
     await testInfo.attach("fixture-final", {
       path: screenshotPath,
       contentType: "image/png",
@@ -775,6 +776,22 @@ test("coalesces opens during loading and ignores a closed menu's delayed read", 
     await insertTemplateFromMenu(page, "Newest template");
     await expect(nextTarget).toHaveValue("New target Newest body");
     await expect(target).toHaveValue("Before Summarize the key ideas from this page in concise bullets.");
+
+    await target.focus();
+    await delayNextContentRead(page, app, "fail");
+    await page.evaluate(() => window.dispatchEvent(new Event("promptcrate:open-menu")));
+    await expectMenuText(page).toContain("Could not load templates. Close PromptCrate and try again.");
+    await expectMenuText(page).toContain("Test load failure");
+    await repeatOpenViaRuntime(page, app, "REOPEN_MENU");
+    await expectMenuText(page).toContain("Test load failure");
+    await clickMenuButton(page, "Close");
+    await waitForMenuClosed(page);
+    await expect(target).toBeFocused();
+    await openPromptMenu(page, page, app);
+    await expectMenuText(page).toContain("Newest template");
+    await expect(page.locator("#" + extensionHostId + " .notice.error")).toHaveCount(0);
+    await clickMenuButton(page, "Close");
+    await waitForMenuClosed(page);
   } finally {
     await app.context.close();
   }
@@ -783,9 +800,10 @@ test("coalesces opens during loading and ignores a closed menu's delayed read", 
 async function delayNextContentRead(
   page: Page,
   app: { context: BrowserContext },
+  mode: "delay" | "fail" = "delay",
 ): Promise<void> {
   const worker = app.context.serviceWorkers()[0] ?? await app.context.waitForEvent("serviceworker");
-  await worker.evaluate(async (url) => {
+  await worker.evaluate(async ({ url, readMode }) => {
     const tab = (await chrome.tabs.query({})).find((item) => item.url === url);
     if (typeof tab?.id !== "number") {
       throw new Error("Fixture tab not found.");
@@ -793,8 +811,15 @@ async function delayNextContentRead(
     // Install the gate in the content script's isolated world, not the page world.
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: () => {
+      func: (readMode: "delay" | "fail") => {
         const originalGet = chrome.storage.local.get.bind(chrome.storage.local);
+        if (readMode === "fail") {
+          chrome.storage.local.get = (() => {
+            chrome.storage.local.get = originalGet;
+            return Promise.reject(new Error("Test load failure"));
+          }) as typeof chrome.storage.local.get;
+          return;
+        }
         let first = true;
         let readCount = 0;
         document.documentElement.removeAttribute("data-promptcrate-read-blocked");
@@ -818,8 +843,9 @@ async function delayNextContentRead(
           return result;
         }) as typeof chrome.storage.local.get;
       },
+      args: [readMode],
     });
-  }, page.url());
+  }, { url: page.url(), readMode: mode });
 }
 
 test("real web smoke covers at least three public input surfaces @real", async (
