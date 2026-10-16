@@ -179,8 +179,7 @@ test("inserts templates into fixture textarea, input, contenteditable, Shadow DO
     await waitForMenuClosed(page);
 
     const screenshotPath = testInfo.outputPath("fixture-final.png");
-    // Keep diagnostic capture within the viewport for headed Chromium under Xvfb.
-    await page.screenshot({ path: screenshotPath });
+    await page.screenshot({ path: screenshotPath, fullPage: true });
     await testInfo.attach("fixture-final", {
       path: screenshotPath,
       contentType: "image/png",
@@ -951,7 +950,7 @@ async function launchPromptCrate(userDataDir: string): Promise<{
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: chromeExecutablePath ? undefined : "chromium",
     executablePath: chromeExecutablePath,
-    headless: false,
+    headless: process.env.PROMPTCRATE_E2E_HEADLESS === "1",
     ignoreDefaultArgs: ["--disable-extensions"],
     args: [
       `--disable-extensions-except=${extensionDir}`,

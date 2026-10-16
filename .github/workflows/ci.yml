@@ -32,7 +32,9 @@ jobs:
       - run: pnpm lint
       - run: pnpm check
       - run: pnpm exec playwright install --with-deps chromium
-      - run: xvfb-run --auto-servernum pnpm test:e2e
+      - run: pnpm test:e2e
+        env:
+          PROMPTCRATE_E2E_HEADLESS: "1"
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
