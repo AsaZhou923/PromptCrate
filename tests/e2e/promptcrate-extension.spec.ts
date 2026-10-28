@@ -898,6 +898,155 @@ test("real web smoke covers at least three public input surfaces @real", async (
   }
 });
 
+test("menu keyboard and editing events stay inside the menu", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-event-isolation"));
+  try {
+    await resetExtensionStorage(app.extensionId, app.context);
+    const page = await app.context.newPage();
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    await page.locator("#textarea").focus();
+    await openPromptMenu(page, page, app);
+    await page.evaluate(() => {
+      document.body.dataset.menuEvents = "[]";
+      for (const type of ["keydown", "keyup", "keypress", "beforeinput", "input"]) {
+        document.addEventListener(type, (event) => {
+          const events = JSON.parse(document.body.dataset.menuEvents ?? "[]") as string[];
+          events.push(event.type);
+          document.body.dataset.menuEvents = JSON.stringify(events);
+        });
+      }
+    });
+
+    const menu = page.locator(`#${extensionHostId}`);
+    await menu.locator("input.search").pressSequentially("Rewrite");
+    await expect(menu.getByRole("option")).toHaveCount(1);
+    await page.keyboard.press("Enter");
+    await menu.locator(".variable-form input").pressSequentially("A draft");
+    await expect(menu.locator(".preview")).toContainText("A draft");
+    await page.keyboard.press("Tab");
+    await expect(menu.getByRole("button", { name: "Back", exact: true })).toBeFocused();
+    await page.keyboard.down("Escape");
+    await waitForMenuClosed(page);
+    expect(await page.locator("body").getAttribute("data-menu-events")).toBe("[]");
+    await page.keyboard.up("Escape");
+    await expect(page.locator("#textarea")).toHaveValue("");
+
+    // Closing the menu restores normal keyboard/input delivery to the page.
+    await page.locator("#textarea").pressSequentially("x");
+    await expect(page.locator("#textarea")).toHaveValue("x");
+    expect(JSON.parse(await page.locator("body").getAttribute("data-menu-events") ?? "[]"))
+      .toEqual(expect.arrayContaining(["keydown", "keyup", "keypress", "beforeinput", "input"]));
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("IME composition preserves the search field and ignores candidate confirmation keys", async (
+  { browserName }, testInfo,
+) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-ime"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    const templates = [
+      createTemplate("translate", "翻译", "Translate this text", []),
+      createTemplate("other", "Other", "Another template", []),
+    ];
+    await options.evaluate((records) => chrome.storage.local.set({ "promptCrate.templates": records }), templates);
+    const page = await app.context.newPage();
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    await page.locator("#textarea").focus();
+    await openPromptMenu(page, page, app);
+    const menu = page.locator(`#${extensionHostId}`);
+    const search = menu.locator("input.search");
+    const originalSearch = await search.elementHandle();
+    const cdp = await app.context.newCDPSession(page);
+
+    for (const text of ["f", "fa"]) {
+      await cdp.send("Input.imeSetComposition", {
+        text, selectionStart: text.length, selectionEnd: text.length,
+      });
+      expect(await originalSearch!.evaluate((node) => node.isConnected)).toBe(true);
+      await expect(search).toHaveValue(text);
+      await expect(menu.getByRole("option")).toHaveCount(2);
+    }
+    for (const key of ["ArrowDown", "Enter", "Escape"]) {
+      await search.dispatchEvent("keydown", { key, bubbles: true, composed: true, isComposing: true });
+    }
+    await expect(menu.getByRole("option").first()).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("#textarea")).toHaveValue("");
+    await expect(search).toBeFocused();
+
+    await cdp.send("Input.insertText", { text: "翻译" });
+    await expect(search).toHaveValue("翻译");
+    await expect(menu.getByRole("option")).toHaveCount(1);
+    expect(await originalSearch!.evaluate((node) => node.isConnected)).toBe(true);
+    // Some IMEs report the confirmation event only through the legacy keyCode.
+    await search.dispatchEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true, composed: true });
+    await expect(search).toBeVisible();
+    await expect(page.locator("#textarea")).toHaveValue("");
+    await page.keyboard.press("Enter");
+    await waitForMenuClosed(page);
+    await expect(page.locator("#textarea")).toHaveValue("Translate this text");
+    await cdp.detach();
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("keyboard navigation keeps selected results visible without rebuilding or losing focus", async (
+  { browserName }, testInfo,
+) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-list-navigation"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    const templates = Array.from({ length: 20 }, (_, index) =>
+      createTemplate(`item-${index}`, `Item ${String(index).padStart(2, "0")}`, `Body ${index}`, []));
+    await options.evaluate((records) => chrome.storage.local.set({ "promptCrate.templates": records }), templates);
+    const page = await app.context.newPage();
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    await page.locator("#textarea").focus();
+    await openPromptMenu(page, page, app);
+    const menu = page.locator(`#${extensionHostId}`);
+    const search = menu.locator("input.search");
+    const list = menu.getByRole("listbox");
+    const originalList = await list.elementHandle();
+    const originalOption = await menu.getByRole("option").first().elementHandle();
+
+    // Keyboard scrolling must keep working with the pointer resting over a row.
+    await menu.getByRole("option").first().hover();
+    for (let index = 0; index < 12; index += 1) {
+      await page.keyboard.press("ArrowDown");
+    }
+    const selected = menu.locator('[role="option"][aria-selected="true"]');
+    await expect(selected).toContainText("Item 12");
+    await expect(search).toBeFocused();
+    expect(await originalList!.evaluate((node) => node.isConnected)).toBe(true);
+    expect(await originalOption!.evaluate((node) => node.isConnected)).toBe(true);
+    expect(await list.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+    const expectSelectionVisible = async () => {
+      await expect.poll(() => selected.evaluate((node) => {
+        const itemRect = node.getBoundingClientRect();
+        const listRect = node.parentElement!.getBoundingClientRect();
+        return itemRect.top >= listRect.top - 1 && itemRect.bottom <= listRect.bottom + 1;
+      })).toBe(true);
+      await expect(search).toHaveAttribute("aria-activedescendant", await selected.getAttribute("id") ?? "");
+      await expect(menu.locator(".template-item.selected")).toHaveCount(1);
+    };
+    await expectSelectionVisible();
+    await page.keyboard.press("ArrowUp");
+    await expect(selected).toContainText("Item 11");
+    await expectSelectionVisible();
+    await page.keyboard.press("Enter");
+    await waitForMenuClosed(page);
+    await expect(page.locator("#textarea")).toHaveValue("Body 11");
+  } finally {
+    await app.context.close();
+  }
+});
+
 const realWebScenarios: Array<{
   name: string;
   url: string;
