@@ -30,6 +30,7 @@ type MenuState = {
   templates: PromptTemplate[];
   query: string;
   selectedIndex: number;
+  isComposing: boolean;
   savedSelection: SavedSelection | null;
   chosenTemplate: PromptTemplate | null;
   values: Record<string, string>;
@@ -118,6 +119,7 @@ if (!window.__promptCrateContentEntryLoaded) {
       templates: [],
       query: "",
       selectedIndex: 0,
+      isComposing: false,
       savedSelection,
       chosenTemplate: null,
       values: {},
@@ -155,8 +157,16 @@ if (!window.__promptCrateContentEntryLoaded) {
       return;
     }
 
-    state.templates = sortTemplatesForMenu(await readPromptTemplates());
-    renderMenu();
+    const currentState = state;
+    const templates = await readPromptTemplates();
+    if (state !== currentState) {
+      return;
+    }
+
+    currentState.templates = sortTemplatesForMenu(templates);
+    if (!currentState.chosenTemplate && !currentState.isComposing) {
+      updateTemplateResults();
+    }
   }
 
   function ensureMenuHost(): { host: HTMLDivElement; shadow: ShadowRoot } {
@@ -176,6 +186,20 @@ if (!window.__promptCrateContentEntryLoaded) {
     host.style.left = "50%";
     host.style.transform = "translateX(-50%)";
     const shadow = host.attachShadow({ mode: "open" });
+    // Let menu controls handle their events before they reach the host page.
+    for (const type of [
+      "keydown", "keyup", "keypress", "beforeinput", "input",
+      "compositionstart", "compositionupdate", "compositionend",
+    ]) {
+      shadow.addEventListener(type, (event) => {
+        if (state && type === "compositionstart") {
+          state.isComposing = true;
+        } else if (state && type === "compositionend") {
+          state.isComposing = false;
+        }
+        event.stopPropagation();
+      });
+    }
     document.documentElement.appendChild(host);
 
     return { host, shadow };
@@ -231,6 +255,7 @@ if (!window.__promptCrateContentEntryLoaded) {
       return;
     }
 
+    state.isComposing = false;
     state.shadow.textContent = "";
     state.shadow.append(createStyles());
 
@@ -300,31 +325,64 @@ if (!window.__promptCrateContentEntryLoaded) {
     searchInput.setAttribute("aria-autocomplete", "list");
     searchInput.placeholder = "Search templates";
     searchInput.value = state.query;
-    searchInput.addEventListener("input", () => {
-      if (!state) {
+    const updateQuery = () => {
+      if (!state || state.isComposing) {
         return;
       }
 
       state.query = searchInput.value;
       state.selectedIndex = 0;
-      renderMenu({ focusSearch: true });
+      updateTemplateResults();
+    };
+    searchInput.addEventListener("input", (event) => {
+      if (!(event as InputEvent).isComposing) {
+        updateQuery();
+      }
+    });
+    searchInput.addEventListener("compositionend", () => {
+      if (state) {
+        state.isComposing = false;
+      }
+      updateQuery();
     });
     searchInput.addEventListener("keydown", handleListKeyDown);
-
-    const filteredTemplates = getFilteredTemplates();
-    const activeOptionId = filteredTemplates[state.selectedIndex]
-      ? `promptcrate-template-option-${state.selectedIndex}`
-      : null;
-
-    if (activeOptionId) {
-      searchInput.setAttribute("aria-activedescendant", activeOptionId);
-    }
 
     const list = document.createElement("div");
     list.id = "promptcrate-template-list";
     list.className = "template-list";
     list.setAttribute("role", "listbox");
     list.setAttribute("aria-label", "Templates");
+    renderTemplateResults(list, searchInput);
+
+    wrapper.append(searchInput, list);
+
+    if (focusSearch) {
+      queueMicrotask(() => {
+        searchInput.focus();
+        searchInput.setSelectionRange(searchInput.value.length, searchInput.value.length);
+      });
+    }
+
+    return wrapper;
+  }
+
+  function updateTemplateResults(): void {
+    const list = state?.shadow.querySelector<HTMLElement>(".template-list");
+    const searchInput = state?.shadow.querySelector<HTMLInputElement>("input.search");
+    if (list && searchInput) {
+      renderTemplateResults(list, searchInput);
+    }
+  }
+
+  function renderTemplateResults(list: HTMLElement, searchInput: HTMLInputElement): void {
+    if (!state) {
+      return;
+    }
+
+    const filteredTemplates = getFilteredTemplates();
+    state.selectedIndex = Math.min(state.selectedIndex, Math.max(filteredTemplates.length - 1, 0));
+    list.replaceChildren();
+    list.scrollTop = 0;
 
     if (filteredTemplates.length === 0) {
       list.append(createNotice("No matching templates."));
@@ -362,20 +420,33 @@ if (!window.__promptCrateContentEntryLoaded) {
       });
     }
 
-    wrapper.append(searchInput, list);
+    updateSelectedTemplate(list, searchInput);
+  }
 
-    if (focusSearch) {
-      queueMicrotask(() => {
-        searchInput.focus();
-        searchInput.setSelectionRange(searchInput.value.length, searchInput.value.length);
-      });
+  function updateSelectedTemplate(
+    list: HTMLElement,
+    searchInput: HTMLInputElement,
+    scrollIntoView = false,
+  ): void {
+    const items = [...list.querySelectorAll<HTMLElement>(".template-item")];
+    items.forEach((item, index) => {
+      const selected = index === state?.selectedIndex;
+      item.classList.toggle("selected", selected);
+      item.setAttribute("aria-selected", String(selected));
+    });
+    const selectedItem = items[state?.selectedIndex ?? -1];
+    if (selectedItem) {
+      searchInput.setAttribute("aria-activedescendant", selectedItem.id);
+      if (scrollIntoView) {
+        selectedItem.scrollIntoView({ block: "nearest" });
+      }
+    } else {
+      searchInput.removeAttribute("aria-activedescendant");
     }
-
-    return wrapper;
   }
 
   function handleListKeyDown(event: KeyboardEvent): void {
-    if (!state) {
+    if (!state || isComposingKey(event)) {
       return;
     }
 
@@ -393,25 +464,30 @@ if (!window.__promptCrateContentEntryLoaded) {
         state.selectedIndex + 1,
         Math.max(filteredTemplates.length - 1, 0),
       );
-      renderMenu({ focusSearch: true });
-      return;
-    }
-
-    if (event.key === "ArrowUp") {
+    } else if (event.key === "ArrowUp") {
       event.preventDefault();
       state.selectedIndex = Math.max(state.selectedIndex - 1, 0);
-      renderMenu({ focusSearch: true });
+    } else if (event.key === "Enter" && filteredTemplates[state.selectedIndex]) {
+      event.preventDefault();
+      void chooseTemplate(filteredTemplates[state.selectedIndex]);
+      return;
+    } else {
       return;
     }
 
-    if (event.key === "Enter" && filteredTemplates[state.selectedIndex]) {
-      event.preventDefault();
-      void chooseTemplate(filteredTemplates[state.selectedIndex]);
+    const list = state.shadow.querySelector<HTMLElement>(".template-list");
+    const searchInput = state.shadow.querySelector<HTMLInputElement>("input.search");
+    if (list && searchInput) {
+      updateSelectedTemplate(list, searchInput, true);
     }
   }
 
+  function isComposingKey(event: KeyboardEvent): boolean {
+    return Boolean(state?.isComposing || event.isComposing || event.keyCode === 229);
+  }
+
   function handlePanelKeyDown(event: KeyboardEvent): void {
-    if (!state) {
+    if (!state || isComposingKey(event)) {
       return;
     }
 
@@ -501,12 +577,6 @@ if (!window.__promptCrateContentEntryLoaded) {
     wrapper.addEventListener("submit", (event) => {
       event.preventDefault();
       void handleVariableSubmit(variables);
-    });
-    wrapper.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        closeMenu();
-      }
     });
 
     for (const variable of variables) {
