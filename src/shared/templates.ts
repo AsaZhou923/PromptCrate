@@ -22,6 +22,10 @@ export type TemplateVariable = {
   required: boolean;
 };
 
+type TemplatePart =
+  | { type: "text"; value: string }
+  | { type: "variable"; name: string; required: boolean; placeholder: string };
+
 export type TemplateValidationError = {
   field: keyof PromptTemplate | "variables";
   message: string;
@@ -96,23 +100,44 @@ export function createDefaultTemplates(now = new Date().toISOString()): PromptTe
   }));
 }
 
-export function extractTemplateVariables(body: string): TemplateVariable[] {
-  const variables = new Map<string, TemplateVariable>();
-  const placeholderPattern = /{{\s*([^{}]+?)\s*}}/g;
+function parseTemplate(body: string): TemplatePart[] {
+  const parts: TemplatePart[] = [];
+  const placeholderPattern = /\\?{{([^{}]*)}}/g;
+  let position = 0;
   let match: RegExpExecArray | null;
 
   while ((match = placeholderPattern.exec(body)) !== null) {
+    parts.push({ type: "text", value: body.slice(position, match.index) });
+    position = placeholderPattern.lastIndex;
+    const placeholder = match[0];
     const rawName = match[1]?.trim() ?? "";
     const isOptional = rawName.endsWith("?");
     const name = (isOptional ? rawName.slice(0, -1) : rawName).trim();
 
-    if (name.length === 0 || variables.has(name)) {
+    if (placeholder.startsWith("\\")) {
+      parts.push({ type: "text", value: placeholder.slice(1) });
+    } else if (name.length === 0) {
+      parts.push({ type: "text", value: placeholder });
+    } else {
+      parts.push({ type: "variable", name, required: !isOptional, placeholder });
+    }
+  }
+
+  parts.push({ type: "text", value: body.slice(position) });
+  return parts;
+}
+
+export function extractTemplateVariables(body: string): TemplateVariable[] {
+  const variables = new Map<string, TemplateVariable>();
+
+  for (const part of parseTemplate(body)) {
+    if (part.type === "text") {
       continue;
     }
 
-    variables.set(name, {
-      name,
-      required: !isOptional,
+    variables.set(part.name, {
+      name: part.name,
+      required: part.required || (variables.get(part.name)?.required ?? false),
     });
   }
 
@@ -122,19 +147,26 @@ export function extractTemplateVariables(body: string): TemplateVariable[] {
 export function renderTemplate(
   body: string,
   values: Record<string, string>,
+  options: { preview?: boolean } = {},
 ): string {
-  return body.replace(/{{\s*([^{}]+?)\s*}}/g, (placeholder, rawName: string) => {
-    const trimmedName = rawName.trim();
-    const isOptional = trimmedName.endsWith("?");
-    const name = (isOptional ? trimmedName.slice(0, -1) : trimmedName).trim();
-    const value = values[name] ?? "";
-
-    if (!isOptional && value.trim().length === 0) {
-      throw new Error(`Missing required variable: ${name}`);
+  return parseTemplate(body).map((part) => {
+    if (part.type === "text") {
+      return part.value;
     }
 
-    return value.length > 0 || isOptional ? value : placeholder;
-  });
+    const value = Object.prototype.hasOwnProperty.call(values, part.name)
+      ? values[part.name] ?? ""
+      : "";
+
+    if (part.required && value.trim().length === 0) {
+      if (options.preview) {
+        return part.placeholder;
+      }
+      throw new Error(`Missing required variable: ${part.name}`);
+    }
+
+    return value;
+  }).join("");
 }
 
 export function validateTemplate(template: PromptTemplate): TemplateValidationError[] {

@@ -555,7 +555,7 @@ if (!window.__promptCrateContentEntryLoaded) {
     const variables = extractTemplateVariables(template.body);
 
     if (variables.length === 0) {
-      await insertRenderedTemplate(template, template.body);
+      await insertRenderedTemplate(template, renderTemplate(template.body, {}));
       return;
     }
 
@@ -578,6 +578,12 @@ if (!window.__promptCrateContentEntryLoaded) {
       event.preventDefault();
       void handleVariableSubmit(variables);
     });
+    wrapper.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !isComposingKey(event)) {
+        event.preventDefault();
+        wrapper.requestSubmit();
+      }
+    });
 
     for (const variable of variables) {
       const label = document.createElement("label");
@@ -586,9 +592,9 @@ if (!window.__promptCrateContentEntryLoaded) {
       const span = document.createElement("span");
       span.textContent = variable.required ? variable.name : `${variable.name} (optional)`;
 
-      const input = document.createElement("input");
-      input.type = "text";
-      input.value = state.values[variable.name] ?? "";
+      const input = document.createElement("textarea");
+      input.rows = 2;
+      input.value = getVariableValue(variable.name);
       input.required = variable.required;
       input.addEventListener("input", () => {
         if (!state) {
@@ -599,6 +605,7 @@ if (!window.__promptCrateContentEntryLoaded) {
           ...state.values,
           [variable.name]: input.value,
         };
+        resizeVariableInput(input);
         updatePreview(wrapper, template);
       });
 
@@ -609,12 +616,17 @@ if (!window.__promptCrateContentEntryLoaded) {
     const preview = document.createElement("pre");
     preview.className = "preview";
     preview.dataset.role = "preview";
-    preview.textContent = createPreviewText(template, state.values);
+    preview.textContent = renderTemplate(template.body, state.values, { preview: true });
     wrapper.append(preview);
 
     if (state.error) {
       wrapper.append(createNotice(state.error, "error"));
     }
+
+    const hint = document.createElement("p");
+    hint.className = "form-hint";
+    hint.textContent = "Enter for a new line. Ctrl/⌘+Enter to insert.";
+    wrapper.append(hint);
 
     const actions = document.createElement("div");
     actions.className = "actions";
@@ -637,15 +649,28 @@ if (!window.__promptCrateContentEntryLoaded) {
     insertButton.type = "submit";
     insertButton.className = "primary";
     insertButton.textContent = "Insert";
+    insertButton.setAttribute("aria-keyshortcuts", "Control+Enter Meta+Enter");
 
     actions.append(backButton, insertButton);
     wrapper.append(actions);
 
     queueMicrotask(() => {
-      wrapper.querySelector("input")?.focus();
+      wrapper.querySelectorAll("textarea").forEach(resizeVariableInput);
+      wrapper.querySelector("textarea")?.focus();
     });
 
     return wrapper;
+  }
+
+  function resizeVariableInput(input: HTMLTextAreaElement): void {
+    input.style.height = "auto";
+    input.style.height = `${Math.min(input.scrollHeight + 2, 160)}px`;
+  }
+
+  function getVariableValue(name: string): string {
+    return state && Object.prototype.hasOwnProperty.call(state.values, name)
+      ? state.values[name]
+      : "";
   }
 
   async function handleVariableSubmit(variables: TemplateVariable[]): Promise<void> {
@@ -656,7 +681,7 @@ if (!window.__promptCrateContentEntryLoaded) {
     const missingVariable = variables.find(
       (variable) =>
         variable.required &&
-        (state?.values[variable.name] ?? "").trim().length === 0,
+        getVariableValue(variable.name).trim().length === 0,
     );
 
     if (missingVariable) {
@@ -714,22 +739,8 @@ if (!window.__promptCrateContentEntryLoaded) {
 
     const preview = form.querySelector<HTMLElement>('[data-role="preview"]');
     if (preview) {
-      preview.textContent = createPreviewText(template, state.values);
+      preview.textContent = renderTemplate(template.body, state.values, { preview: true });
     }
-  }
-
-  function createPreviewText(
-    template: PromptTemplate,
-    values: Record<string, string>,
-  ): string {
-    return template.body.replace(/{{\s*([^{}]+?)\s*}}/g, (placeholder, rawName: string) => {
-      const trimmedName = rawName.trim();
-      const isOptional = trimmedName.endsWith("?");
-      const name = (isOptional ? trimmedName.slice(0, -1) : trimmedName).trim();
-      const value = values[name] ?? "";
-
-      return value.length > 0 ? value : placeholder;
-    });
   }
 
   function createNotice(message: string, tone: "info" | "error" = "info"): HTMLElement {
@@ -752,6 +763,8 @@ if (!window.__promptCrateContentEntryLoaded) {
       }
 
       .panel {
+        display: flex;
+        flex-direction: column;
         width: 100%;
         max-height: min(620px, calc(100vh - 96px));
         overflow: hidden;
@@ -764,6 +777,7 @@ if (!window.__promptCrateContentEntryLoaded) {
 
       .header {
         display: flex;
+        flex-shrink: 0;
         align-items: center;
         justify-content: space-between;
         gap: 12px;
@@ -781,7 +795,8 @@ if (!window.__promptCrateContentEntryLoaded) {
       }
 
       button,
-      input {
+      input,
+      textarea {
         font: inherit;
       }
 
@@ -863,6 +878,8 @@ if (!window.__promptCrateContentEntryLoaded) {
 
       .variable-form {
         display: grid;
+        min-height: 0;
+        overflow: auto;
         gap: 12px;
         padding: 12px;
       }
@@ -875,13 +892,23 @@ if (!window.__promptCrateContentEntryLoaded) {
         font-weight: 700;
       }
 
-      .field input {
+      .field textarea {
         width: 100%;
+        min-height: 64px;
+        max-height: 160px;
+        resize: vertical;
         padding: 8px 10px;
         color: #172026;
         border: 1px solid #b8c6cf;
         border-radius: 7px;
         background: #ffffff;
+      }
+
+      .form-hint {
+        margin: 0;
+        color: #526470;
+        font-size: 12px;
+        font-weight: 400;
       }
 
       .preview {

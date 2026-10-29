@@ -40,6 +40,87 @@ describe("template variables", () => {
       "Missing required variable: name",
     );
   });
+
+  it.each(["{{x?}} / {{x}}", "{{x}} / {{x?}}"])(
+    "requires a duplicate variable regardless of occurrence order: %s",
+    (body) => {
+      expect(extractTemplateVariables(body)).toEqual([{ name: "x", required: true }]);
+      expect(() => renderTemplate(body, {})).toThrow("Missing required variable: x");
+      expect(() => renderTemplate(body, { x: " \n " })).toThrow("Missing required variable: x");
+      expect(renderTemplate(body, { x: "filled" })).toBe("filled / filled");
+    },
+  );
+
+  it("treats escaped placeholders as literal text during extraction, validation, and rendering", () => {
+    const body = String.raw`Literal \{{name}}, $\{{ github.sha }}, and \{{unfilled?}}; real {{name}}`;
+    expect(extractTemplateVariables(body)).toEqual([{ name: "name", required: true }]);
+    expect(validateTemplate({ ...baseTemplate, body })).toEqual([]);
+    expect(renderTemplate(body, { name: "Ada" })).toBe(
+      "Literal {{name}}, ${{ github.sha }}, and {{unfilled?}}; real Ada",
+    );
+  });
+
+  it("renders templates containing only escaped placeholders without requiring values", () => {
+    const body = String.raw`$\{{ github.sha }} \{{name}}`;
+    expect(extractTemplateVariables(body)).toEqual([]);
+    expect(renderTemplate(body, {})).toBe("${{ github.sha }} {{name}}");
+    expect(renderTemplate(body, {}, { preview: true })).toBe(renderTemplate(body, {}));
+  });
+
+  it("removes exactly one immediately preceding escape and preserves other backslashes", () => {
+    expect(renderTemplate(String.raw`\\{{name}} C:\folder\file`, {})).toBe(
+      String.raw`\{{name}} C:\folder\file`,
+    );
+  });
+
+  it.each(["{{}}", "{{ }}", "{{?}}", "{{ ? }}"])(
+    "preserves empty placeholder %s in plain and mixed templates",
+    (literal) => {
+      expect(extractTemplateVariables(literal)).toEqual([]);
+      expect(validateTemplate({ ...baseTemplate, body: literal })).toEqual([]);
+      expect(renderTemplate(literal, {})).toBe(literal);
+      expect(renderTemplate(`${literal} {{name}}`, { name: "Ada" })).toBe(`${literal} Ada`);
+      expect(renderTemplate(`${literal} {{name}}`, {}, { preview: true })).toBe(`${literal} {{name}}`);
+    },
+  );
+
+  it("retains missing required placeholders in preview but removes empty optional values", () => {
+    const body = "{{ required }} / {{optional?}} / {{blank}} / {{spaces?}}";
+    const values = { blank: " \n ", spaces: "  " };
+    expect(renderTemplate(body, values, { preview: true })).toBe(
+      "{{ required }} /  / {{blank}} /   ",
+    );
+    expect(() => renderTemplate(body, values)).toThrow("Missing required variable: required");
+  });
+
+  it("makes previews and insertion match for valid Unicode variables and multiline values", () => {
+    const body = String.raw`\{{literal}} {{内容}} {{語 調?}} {{内容?}} {{empty?}}`;
+    const values = { 内容: "first\n  second\nthird", "語 調": " 丁寧 " };
+    expect(extractTemplateVariables(body)).toEqual([
+      { name: "内容", required: true },
+      { name: "語 調", required: false },
+      { name: "empty", required: false },
+    ]);
+    expect(validateTemplate({ ...baseTemplate, body })).toEqual([]);
+    const rendered = renderTemplate(body, values);
+    expect(rendered).toBe("{{literal}} first\n  second\nthird  丁寧  first\n  second\nthird ");
+    expect(renderTemplate(body, values, { preview: true })).toBe(rendered);
+  });
+
+  it("does not interpret supplied variable values recursively", () => {
+    const values = { text: "{{unfilled}} \\{{escaped}} ${{ github.sha }}" };
+    expect(renderTemplate("{{text}}", values)).toBe(values.text);
+    expect(renderTemplate("{{text}}", values, { preview: true })).toBe(values.text);
+  });
+
+  it("does not use inherited object properties as variable values", () => {
+    expect(() => renderTemplate("{{constructor}}", {})).toThrow(
+      "Missing required variable: constructor",
+    );
+    expect(renderTemplate("{{toString?}}", {})).toBe("");
+    expect(renderTemplate("{{constructor}}", {}, { preview: true })).toBe("{{constructor}}");
+    expect(renderTemplate("{{constructor}}", { constructor: "provided" })).toBe("provided");
+  });
 });
 
 describe("template validation and search", () => {
@@ -68,6 +149,17 @@ describe("template validation and search", () => {
       }).map((error) => error.field),
     ).toEqual(["id", "id", "title", "body"]);
   });
+
+  it.each(["github.sha", "name!", "name?", "💡"])(
+    "still rejects unescaped nonempty invalid variable names: %s",
+    (name) => {
+      const body = name === "name?" ? "{{name??}}" : `{{${name}}}`;
+      expect(validateTemplate({ ...baseTemplate, body })).toContainEqual({
+        field: "variables",
+        message: `Invalid variable name: ${name}`,
+      });
+    },
+  );
 
   it("searches title, body, and tags", () => {
     const templates = [
