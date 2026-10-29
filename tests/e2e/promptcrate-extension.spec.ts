@@ -663,7 +663,7 @@ test("repeated opens preserve page selections, search, variable drafts, and Back
     });
     await openPromptMenu(page, page, app);
     await chooseTemplateFromMenu(page, "Rewrite clearer");
-    const variable = page.locator("#" + extensionHostId + " .variable-form input");
+    const variable = page.locator("#" + extensionHostId + " .variable-form textarea");
     await variable.fill("Preserved variable");
     await repeatOpenViaRuntime(page, app, "REOPEN_MENU");
     await page.evaluate(() => window.dispatchEvent(new Event("promptcrate:open-menu")));
@@ -922,7 +922,7 @@ test("menu keyboard and editing events stay inside the menu", async ({ browserNa
     await menu.locator("input.search").pressSequentially("Rewrite");
     await expect(menu.getByRole("option")).toHaveCount(1);
     await page.keyboard.press("Enter");
-    await menu.locator(".variable-form input").pressSequentially("A draft");
+    await menu.locator(".variable-form textarea").pressSequentially("A draft");
     await expect(menu.locator(".preview")).toContainText("A draft");
     await page.keyboard.press("Tab");
     await expect(menu.getByRole("button", { name: "Back", exact: true })).toBeFocused();
@@ -1042,6 +1042,135 @@ test("keyboard navigation keeps selected results visible without rebuilding or l
     await page.keyboard.press("Enter");
     await waitForMenuClosed(page);
     await expect(page.locator("#textarea")).toHaveValue("Body 11");
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("multiline variables preserve pasted text and Enter, with modifier-Enter submission", async (
+  { browserName }, testInfo,
+) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-multiline"));
+  try {
+    await resetExtensionStorage(app.extensionId, app.context);
+    const page = await app.context.newPage();
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    const target = page.locator("#textarea");
+    const menu = page.locator(`#${extensionHostId}`);
+    const stack = "TypeError: x\n    at foo (a.js:1)\n    at bar (b.js:2)";
+    const prefix = "Given this error and context, identify likely root causes and the next three checks:\n\n";
+
+    for (const shortcut of ["Control+Enter", "Meta+Enter"]) {
+      await target.fill("");
+      await target.focus();
+      await openPromptMenu(page, page, app);
+      await chooseTemplateFromMenu(page, "Debug helper");
+      const input = menu.getByLabel("error", { exact: true });
+      await expect(input).toBeFocused();
+      await input.fill(stack);
+      await input.press("End");
+      await input.press("Enter");
+      await input.pressSequentially("Next check");
+      const value = `${stack}\nNext check`;
+      await expect(input).toHaveValue(value);
+      await expect(target).toHaveValue("");
+      await expect(menu.locator(".preview")).toHaveText(prefix + value, { useInnerText: false });
+      if (shortcut === "Control+Enter") {
+        const screenshotPath = testInfo.outputPath("multiline-variable-form.png");
+        await menu.screenshot({ path: screenshotPath });
+        await testInfo.attach("multiline-variable-form", { path: screenshotPath, contentType: "image/png" });
+      }
+      await input.dispatchEvent("keydown", {
+        key: "Enter", ctrlKey: true, isComposing: true, bubbles: true, composed: true,
+      });
+      await expect(input).toBeVisible();
+      await expect(target).toHaveValue("");
+      await input.press(shortcut);
+      await waitForMenuClosed(page);
+      await expect(target).toHaveValue(prefix + value);
+    }
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("literal-only escaped braces save through Options and render without a variable form", async (
+  { browserName }, testInfo,
+) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-literal-braces"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    const body = [
+      "Deploy $\\{{ github.sha }}", "\\{{ user.name }}", "\\{{name}}", "{{ }}", "{{?}}",
+      '\\{{ {"key": "value"} }}', '\\{{ "{{first}} {{second}}" }}',
+    ].join("; ");
+    const expected = [
+      "Deploy ${{ github.sha }}", "{{ user.name }}", "{{name}}", "{{ }}", "{{?}}",
+      '{{ {"key": "value"} }}', '{{ "{{first}} {{second}}" }}',
+    ].join("; ");
+    await options.getByRole("button", { name: "New", exact: true }).click();
+    await options.getByLabel("ID", { exact: true }).fill("literal-braces");
+    await options.getByLabel("Title", { exact: true }).fill("Literal braces");
+    await options.getByLabel("Body", { exact: true }).fill(body);
+    await options.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(options.locator(".status")).toContainText('Saved "Literal braces".');
+    await options.reload();
+    await expect(options.locator(".status")).toContainText("templates loaded.");
+    expect((await readTemplates(options)).find((record) => record.id === "literal-braces")?.body).toBe(body);
+
+    const page = await app.context.newPage();
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    await page.locator("#textarea").focus();
+    await openPromptMenu(page, page, app);
+    await chooseTemplateFromMenu(page, "Literal braces");
+    await expect(page.locator(`#${extensionHostId} .variable-form`)).toHaveCount(0);
+    await waitForMenuClosed(page);
+    await expect(page.locator("#textarea")).toHaveValue(expected);
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("duplicate variable requirements and optional preview match the inserted text", async (
+  { browserName }, testInfo,
+) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-variable-consistency"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    const body = "A {{x?}} B {{x}} C {{note?}} D \\{{ user.name }} E {{constructor?}}";
+    await options.evaluate((record) => chrome.storage.local.set({ "promptCrate.templates": [record] }),
+      createTemplate("mixed-variables", "Mixed variables", body, []));
+    const page = await app.context.newPage();
+    await page.setViewportSize({ width: 800, height: 480 });
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    await page.locator("#textarea").focus();
+    await openPromptMenu(page, page, app);
+    await chooseTemplateFromMenu(page, "Mixed variables");
+    const menu = page.locator(`#${extensionHostId}`);
+    const required = menu.getByLabel("x", { exact: true });
+    const optional = menu.getByLabel("note (optional)", { exact: true });
+    await expect(menu.locator(".field")).toHaveCount(3);
+    expect(await menu.locator(".variable-form").evaluate((form) => form.scrollHeight > form.clientHeight)).toBe(true);
+    await expect(menu.getByLabel("constructor (optional)", { exact: true })).toHaveValue("");
+    await expect(required).toHaveAttribute("required", "");
+    await expect(optional).not.toHaveAttribute("required");
+    await expect(menu.locator(".preview")).toHaveText("A  B {{x}} C  D {{ user.name }} E ");
+    await menu.getByRole("button", { name: "Insert", exact: true }).click();
+    await expect(required).toBeFocused();
+    await expect(page.locator("#textarea")).toHaveValue("");
+    await required.fill("   ");
+    await menu.getByRole("button", { name: "Insert", exact: true }).click();
+    await expect(menu.locator(".notice.error")).toContainText("Fill x before inserting.");
+    await expect(page.locator("#textarea")).toHaveValue("");
+    await required.fill("Ready\nline");
+    const expected = "A Ready\nline B Ready\nline C  D {{ user.name }} E ";
+    expect(await menu.locator(".preview").textContent()).toBe(expected);
+    await menu.getByRole("button", { name: "Insert", exact: true }).click();
+    await waitForMenuClosed(page);
+    await expect(page.locator("#textarea")).toHaveValue(expected);
   } finally {
     await app.context.close();
   }
@@ -1460,7 +1589,7 @@ async function insertTemplateFromMenu(
         const label = labels.find((candidate) =>
           candidate.querySelector("span")?.textContent?.startsWith(variableName),
         );
-        const input = label?.querySelector<HTMLInputElement>("input");
+        const input = label?.querySelector<HTMLTextAreaElement>("textarea");
 
         if (!input) {
           throw new Error(`Variable input not found: ${variableName}`);
