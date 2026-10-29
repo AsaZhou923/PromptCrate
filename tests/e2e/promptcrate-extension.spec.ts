@@ -1102,8 +1102,14 @@ test("literal-only escaped braces save through Options and render without a vari
   const app = await launchPromptCrate(testInfo.outputPath("profile-literal-braces"));
   try {
     const options = await resetExtensionStorage(app.extensionId, app.context);
-    const body = "Deploy $\\{{ github.sha }}; \\{{ user.name }}; \\{{name}}; {{ }}; {{?}}";
-    const expected = "Deploy ${{ github.sha }}; {{ user.name }}; {{name}}; {{ }}; {{?}}";
+    const body = [
+      "Deploy $\\{{ github.sha }}", "\\{{ user.name }}", "\\{{name}}", "{{ }}", "{{?}}",
+      '\\{{ {"key": "value"} }}', '\\{{ "{{first}} {{second}}" }}',
+    ].join("; ");
+    const expected = [
+      "Deploy ${{ github.sha }}", "{{ user.name }}", "{{name}}", "{{ }}", "{{?}}",
+      '{{ {"key": "value"} }}', '{{ "{{first}} {{second}}" }}',
+    ].join("; ");
     await options.getByRole("button", { name: "New", exact: true }).click();
     await options.getByLabel("ID", { exact: true }).fill("literal-braces");
     await options.getByLabel("Title", { exact: true }).fill("Literal braces");
@@ -1118,7 +1124,9 @@ test("literal-only escaped braces save through Options and render without a vari
     await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
     await page.locator("#textarea").focus();
     await openPromptMenu(page, page, app);
-    await insertTemplateFromMenu(page, "Literal braces");
+    await chooseTemplateFromMenu(page, "Literal braces");
+    await expect(page.locator(`#${extensionHostId} .variable-form`)).toHaveCount(0);
+    await waitForMenuClosed(page);
     await expect(page.locator("#textarea")).toHaveValue(expected);
   } finally {
     await app.context.close();

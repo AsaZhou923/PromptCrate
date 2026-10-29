@@ -102,21 +102,42 @@ export function createDefaultTemplates(now = new Date().toISOString()): PromptTe
 
 function parseTemplate(body: string): TemplatePart[] {
   const parts: TemplatePart[] = [];
-  const placeholderPattern = /\\?{{([^{}]*)}}/g;
+  const placeholderPattern = /\\{{|{{([^{}]*)}}/g;
   let position = 0;
   let match: RegExpExecArray | null;
 
   while ((match = placeholderPattern.exec(body)) !== null) {
     parts.push({ type: "text", value: body.slice(position, match.index) });
+
+    if (match[0].startsWith("\\")) {
+      let depth = 1;
+      let end = placeholderPattern.lastIndex;
+      while (end < body.length && depth > 0) {
+        if (body.startsWith("{{", end)) {
+          depth += 1;
+          end += 2;
+        } else if (body.startsWith("}}", end)) {
+          depth -= 1;
+          end += 2;
+        } else {
+          end += 1;
+        }
+      }
+
+      // An incomplete escape stays verbatim and shields the rest from variable parsing.
+      parts.push({ type: "text", value: body.slice(match.index + (depth === 0 ? 1 : 0), end) });
+      position = end;
+      placeholderPattern.lastIndex = end;
+      continue;
+    }
+
     position = placeholderPattern.lastIndex;
     const placeholder = match[0];
     const rawName = match[1]?.trim() ?? "";
     const isOptional = rawName.endsWith("?");
     const name = (isOptional ? rawName.slice(0, -1) : rawName).trim();
 
-    if (placeholder.startsWith("\\")) {
-      parts.push({ type: "text", value: placeholder.slice(1) });
-    } else if (name.length === 0) {
+    if (name.length === 0) {
       parts.push({ type: "text", value: placeholder });
     } else {
       parts.push({ type: "variable", name, required: !isOptional, placeholder });

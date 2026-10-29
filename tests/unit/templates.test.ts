@@ -73,6 +73,40 @@ describe("template variables", () => {
     );
   });
 
+  it.each([
+    String.raw`\{{ {"key":"value"} }}`,
+    String.raw`\{{ "{{name}}" }}`,
+    String.raw`\{{ "{{first}} {{second}}" }}`,
+    String.raw`\{{ "\{{inner}}" {{outer {{deep}}}} }}`,
+    String.raw`\{{
+  {"key": "{{first}}"}
+  {{second}}
+}}`,
+  ])("preserves a complete escaped expression with arbitrary nested braces: %s", (literal) => {
+    const body = `${literal} {{real}}`;
+    expect(extractTemplateVariables(body)).toEqual([{ name: "real", required: true }]);
+    expect(validateTemplate({ ...baseTemplate, body })).toEqual([]);
+    const expected = `${literal.slice(1)} filled`;
+    expect(renderTemplate(body, { real: "filled" })).toBe(expected);
+    expect(renderTemplate(body, { real: "filled" }, { preview: true })).toBe(expected);
+  });
+
+  it.each([
+    String.raw`\{{ {"key":"value"}`,
+    String.raw`\{{ "{{hidden}}"`,
+    String.raw`\{{
+  {{github.sha}} \{{nested}}
+  {{another}}
+`,
+  ])("preserves an unterminated escaped expression and shields its remaining contents: %s", (literal) => {
+    const body = `{{real}} ${literal}`;
+    expect(extractTemplateVariables(body)).toEqual([{ name: "real", required: true }]);
+    expect(validateTemplate({ ...baseTemplate, body })).toEqual([]);
+    const expected = `filled ${literal}`;
+    expect(renderTemplate(body, { real: "filled" })).toBe(expected);
+    expect(renderTemplate(body, { real: "filled" }, { preview: true })).toBe(expected);
+  });
+
   it.each(["{{}}", "{{ }}", "{{?}}", "{{ ? }}"])(
     "preserves empty placeholder %s in plain and mixed templates",
     (literal) => {
