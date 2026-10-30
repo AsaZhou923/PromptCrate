@@ -365,6 +365,123 @@ test("composes Shadow DOM insertion events and honors document beforeinput cance
   }
 });
 
+test("Options saves favorites through the form and preserves unsaved edits on failure", async (
+  { browserName }, testInfo,
+) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-favorite-form"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    await options.getByRole("button", { name: "Draft reply", exact: false }).click();
+    const favorite = options.getByRole("checkbox", { name: "Favorite", exact: true });
+    const saved = async () => (await readTemplates(options)).find((record) => record.id === "draft-reply");
+    const originalBody = (await saved())!.body;
+    await expect(options.getByRole("button", { name: /^(Unfavorite|Favorite)$/ })).toHaveCount(0);
+    await favorite.check();
+    await options.getByLabel("Body").fill("Draft a reply to {{message}}.\nTone: {{tone?}}");
+    expect((await saved())!.isFavorite).toBe(false);
+    expect((await saved())!.body).toBe(originalBody);
+
+    await options.evaluate(() => {
+      const originalSet = chrome.storage.local.set;
+      chrome.storage.local.set = (() => Promise.reject(new Error("Test save failure"))) as typeof chrome.storage.local.set;
+      window.addEventListener("promptcrate:test-restore-save", () => {
+        chrome.storage.local.set = originalSet;
+      }, { once: true });
+    });
+    await options.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(options.locator(".status.error")).toContainText("Test save failure");
+    await expect(favorite).toBeChecked();
+    await expect(options.getByLabel("Body")).toHaveValue("Draft a reply to {{message}}.\nTone: {{tone?}}");
+    expect((await saved())!.isFavorite).toBe(false);
+
+    await options.evaluate(() => window.dispatchEvent(new Event("promptcrate:test-restore-save")));
+    await options.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(options.locator(".status")).toContainText('Saved "Draft reply".');
+    expect((await saved())!.isFavorite).toBe(true);
+    expect((await saved())!.body).toBe("Draft a reply to {{message}}.\nTone: {{tone?}}");
+    await expect(options.locator(".template-row").first()).toContainText("* Draft reply");
+    await options.reload();
+    await expect(options.locator(".status")).toContainText("templates loaded.");
+    await options.getByRole("button", { name: /Draft reply/ }).click();
+    await expect(favorite).toBeChecked();
+    const screenshotPath = testInfo.outputPath("options-favorite-form.png");
+    await options.screenshot({ path: screenshotPath, fullPage: true });
+    await testInfo.attach("options-favorite-form", { path: screenshotPath, contentType: "image/png" });
+
+    await favorite.uncheck();
+    expect((await saved())!.isFavorite).toBe(true);
+    await options.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(options.locator(".status")).toContainText('Saved "Draft reply".');
+    expect((await saved())!.isFavorite).toBe(false);
+    await options.reload();
+    await expect(options.locator(".status")).toContainText("templates loaded.");
+    await options.getByRole("button", { name: /Draft reply/ }).click();
+    await expect(favorite).not.toBeChecked();
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("Options generates unique automatic IDs and splits Chinese tag punctuation", async (
+  { browserName }, testInfo,
+) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-auto-ids"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    const original = (await readTemplates(options)).find((record) => record.id === "summarize-page");
+    for (const suffix of ["2", "3"]) {
+      await options.getByRole("button", { name: "New", exact: true }).click();
+      await options.getByLabel("Title", { exact: true }).fill("Summarize page");
+      await options.getByLabel("Body", { exact: true }).fill(`Separate template ${suffix}`);
+      await options.getByLabel("Tags", { exact: true }).fill("写作，翻译、 写作;coding；阅读, , translation");
+      await options.getByRole("checkbox", { name: "Favorite", exact: true }).check();
+      await options.getByRole("button", { name: "Save", exact: true }).click();
+      await expect(options.locator(".status")).toContainText('Saved "Summarize page".');
+      await expect(options.getByLabel("ID", { exact: true })).toHaveValue(`summarize-page-${suffix}`);
+      const record = (await readTemplates(options)).find((item) => item.id === `summarize-page-${suffix}`);
+      expect(record).toMatchObject({
+        body: `Separate template ${suffix}`, isFavorite: true,
+        tags: ["写作", "翻译", "coding", "阅读", "translation"],
+      });
+    }
+    expect((await readTemplates(options)).find((record) => record.id === "summarize-page")).toEqual(original);
+    // Clearing the ID during editing may reuse that template's own generated ID.
+    await options.getByLabel("ID", { exact: true }).fill("   ");
+    await options.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(options.locator(".status")).toContainText('Saved "Summarize page".');
+    await expect(options.getByLabel("ID", { exact: true })).toHaveValue("summarize-page-3");
+    expect(await readTemplates(options)).toHaveLength(9);
+
+    await options.getByRole("button", { name: "New", exact: true }).click();
+    await options.getByLabel("ID", { exact: true }).fill(" summarize-page ");
+    await options.getByLabel("Title", { exact: true }).fill("Explicit duplicate");
+    await options.getByLabel("Body", { exact: true }).fill("Must not overwrite");
+    await options.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(options.locator(".status.error")).toContainText("Template ID already exists.");
+    expect(await readTemplates(options)).toHaveLength(9);
+    expect((await readTemplates(options)).find((record) => record.id === "summarize-page")).toEqual(original);
+
+    // Non-Latin titles can fall back to the same timestamp; generated IDs still need deduplication.
+    await options.evaluate(() => { Date.now = () => 1_793_318_400_000; });
+    for (const suffix of ["", "-2"]) {
+      await options.getByRole("button", { name: "New", exact: true }).click();
+      await options.getByLabel("Title", { exact: true }).fill("翻译模板");
+      await options.getByLabel("Body", { exact: true }).fill("Translate {{text}}");
+      await options.getByRole("button", { name: "Save", exact: true }).click();
+      await expect(options.locator(".status")).toContainText('Saved "翻译模板".');
+      await expect(options.getByLabel("ID", { exact: true })).toHaveValue(`template-1793318400000${suffix}`);
+    }
+    await options.reload();
+    await expect(options.locator(".status")).toContainText("11 templates loaded.");
+    const records = await readTemplates(options);
+    expect(new Set(records.map((record) => record.id)).size).toBe(11);
+  } finally {
+    await app.context.close();
+  }
+});
+
 test("manages templates through Options CRUD, import, export, and persistence", async (
   { browserName },
   testInfo,
@@ -392,8 +509,9 @@ test("manages templates through Options CRUD, import, export, and persistence", 
     await expect(options.locator(".status")).toContainText('Saved "E2E Insert Template".');
     await expect.poll(() => readTemplates(options).then((items) => items.length)).toBe(8);
 
-    await options.getByRole("button", { name: "Favorite" }).click();
-    await expect(options.locator(".status")).toContainText("Favorite updated.");
+    await options.getByRole("checkbox", { name: "Favorite", exact: true }).check();
+    await options.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(options.locator(".status")).toContainText('Saved "E2E Insert Template".');
     await expect(options.locator(".template-row").first()).toContainText("* E2E Insert Template");
 
     await options.getByLabel("Body").fill("E2E edited body for {{name}}");
