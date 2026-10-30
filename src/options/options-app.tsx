@@ -88,7 +88,10 @@ function OptionsApp() {
     }
 
     const candidate = normalizeTemplate({
-      id: form.id || createTemplateId(form.title),
+      id: form.id.trim() || createUniqueTemplateId(
+        createTemplateId(form.title),
+        templates.filter((template) => template.id !== selectedId),
+      ),
       title: form.title,
       body: form.body,
       tags: normalizeTags(splitTags(form.tags)),
@@ -166,29 +169,6 @@ function OptionsApp() {
     }
     setSelectedId(copy.id);
     setForm(templateToForm(copy));
-  }
-
-  async function toggleFavorite(template: PromptTemplate): Promise<void> {
-    const nextTemplates = templates.map((item) =>
-      item.id === template.id
-        ? {
-            ...item,
-            isFavorite: !item.isFavorite,
-            updatedAt: new Date().toISOString(),
-          }
-        : item,
-    );
-
-    if (!await persistTemplates(nextTemplates, "Favorite updated.")) {
-      return;
-    }
-
-    if (selectedId === template.id) {
-      setForm((currentForm) => ({
-        ...currentForm,
-        isFavorite: !template.isFavorite,
-      }));
-    }
   }
 
   function exportTemplates(): void {
@@ -351,13 +331,6 @@ function OptionsApp() {
               <button
                 type="button"
                 disabled={!selectedTemplate}
-                onClick={() => selectedTemplate && void toggleFavorite(selectedTemplate)}
-              >
-                {form.isFavorite ? "Unfavorite" : "Favorite"}
-              </button>
-              <button
-                type="button"
-                disabled={!selectedTemplate}
                 onClick={() => void duplicateTemplate()}
               >
                 Copy
@@ -463,7 +436,7 @@ function templateToForm(template: PromptTemplate): TemplateFormState {
 }
 
 function splitTags(tags: string): string[] {
-  return tags.split(",");
+  return tags.split(/[,，、;；\r\n]+/);
 }
 
 function createTemplateId(title: string): string {
