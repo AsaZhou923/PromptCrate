@@ -13,6 +13,7 @@ import { promises as fs } from "node:fs";
 import fsSync from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { detectFocusedInsertTarget } from "../../src/background/frame-targeting";
 
 type PromptTemplateRecord = {
   id: string;
@@ -360,6 +361,232 @@ test("composes Shadow DOM insertion events and honors document beforeinput cance
         await waitForMenuClosed(page);
       }
     }
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("native template insertion delivers one input event and supports undo and redo", async (
+  { browserName }, testInfo,
+) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-native-undo"));
+  try {
+    await resetExtensionStorage(app.extensionId, app.context);
+    const page = await app.context.newPage();
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    const original = "Before REPLACE after";
+    const summary = "Summarize the key ideas from this page in concise bullets.";
+    for (const selector of ["#textarea", "#text-input", "#shadow-input", "#editable"]) {
+      const target = page.locator(selector);
+      await target.evaluate((element, value) => {
+        element.addEventListener("beforeinput", (event) => {
+          const events = JSON.parse((element as HTMLElement).dataset.editEvents ?? "[]") as unknown[];
+          events.push({ type: event.type, trusted: event.isTrusted });
+          (element as HTMLElement).dataset.editEvents = JSON.stringify(events);
+          if ((event as InputEvent).inputType === "insertText") {
+            if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+              element.setSelectionRange(element.value.length, element.value.length);
+            } else {
+              const moved = document.createRange();
+              moved.selectNodeContents(element);
+              moved.collapse(false);
+              document.getSelection()!.removeAllRanges();
+              document.getSelection()!.addRange(moved);
+            }
+          }
+        });
+        element.addEventListener("input", (event) => {
+          const events = JSON.parse((element as HTMLElement).dataset.editEvents ?? "[]") as unknown[];
+          events.push({ type: event.type, trusted: event.isTrusted });
+          (element as HTMLElement).dataset.editEvents = JSON.stringify(events);
+        });
+        if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+          element.value = value;
+          element.focus();
+          element.setSelectionRange(7, 14);
+        } else {
+          element.textContent = value;
+          (element as HTMLElement).focus();
+          const range = document.createRange();
+          range.setStart(element.firstChild!, 7);
+          range.setEnd(element.firstChild!, 14);
+          document.getSelection()!.removeAllRanges();
+          document.getSelection()!.addRange(range);
+        }
+        (element as HTMLElement).dataset.editEvents = "[]";
+      }, original);
+      await openPromptMenu(page, page, app);
+      await insertTemplateFromMenu(page, "Summarize page");
+      expect(await readEditableValue(target)).toBe(`Before ${summary} after`);
+      expect(JSON.parse(await target.getAttribute("data-edit-events") ?? "[]")).toEqual([
+        { type: "beforeinput", trusted: false }, { type: "input", trusted: true },
+      ]);
+      await page.keyboard.press("Control+z");
+      await expect.poll(() => readEditableValue(target)).toBe(original);
+      await page.keyboard.press("Control+Shift+z");
+      await expect.poll(() => readEditableValue(target)).toBe(`Before ${summary} after`);
+    }
+
+    await page.evaluate(() => {
+      const textarea = document.createElement("textarea");
+      textarea.id = "history-textarea";
+      document.body.prepend(textarea);
+    });
+    const textarea = page.locator("#history-textarea");
+    await textarea.pressSequentially("Earlier typing");
+    await openPromptMenu(page, page, app);
+    await insertTemplateFromMenu(page, "Summarize page");
+    await expect(textarea).toHaveValue(`Earlier typing${summary}`);
+    await page.keyboard.press("Control+z");
+    await expect(textarea).toHaveValue("Earlier typing");
+    await page.keyboard.press("Control+z");
+    await expect(textarea).toHaveValue("");
+
+    for (const selector of ["#textarea", "#text-input"]) {
+      for (const value of ["abcde", "abc"]) {
+        const constrained = page.locator(selector);
+        await constrained.evaluate((element, text) => {
+          const control = element as HTMLInputElement | HTMLTextAreaElement;
+          control.maxLength = 5;
+          control.value = text;
+          control.focus();
+          control.setSelectionRange(text.length, text.length);
+        }, value);
+        await openPromptMenu(page, page, app);
+        await chooseTemplateFromMenu(page, "Summarize page");
+        await expectMenuText(page).toContain("PromptCrate could not insert into this field.");
+        await expect(constrained).toHaveValue(value);
+        await clickMenuButton(page, "Close");
+        await waitForMenuClosed(page);
+      }
+    }
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("native insertion and undo update React controlled inputs", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-react-inputs"));
+  try {
+    await resetExtensionStorage(app.extensionId, app.context);
+    const page = await app.context.newPage();
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    await page.addScriptTag({ path: path.join(repoRoot, "node_modules/react/umd/react.production.min.js") });
+    await page.addScriptTag({ path: path.join(repoRoot, "node_modules/react-dom/umd/react-dom.production.min.js") });
+    await page.evaluate(() => {
+      const { React, ReactDOM } = window as unknown as {
+        React: typeof import("react");
+        ReactDOM: typeof import("react-dom/client");
+      };
+      const host = document.createElement("div");
+      document.body.prepend(host);
+      function Editor() {
+        const [input, setInput] = React.useState("Before REPLACE after");
+        const [textarea, setTextarea] = React.useState("Before REPLACE after");
+        return React.createElement("div", null,
+          React.createElement("input", {
+            id: "react-input", value: input,
+            onChange: (event: { target: { value: string } }) => setInput(event.target.value),
+          }),
+          React.createElement("textarea", {
+            id: "react-textarea", value: textarea,
+            onChange: (event: { target: { value: string } }) => setTextarea(event.target.value),
+          }));
+      }
+      ReactDOM.createRoot(host).render(React.createElement(Editor, null));
+    });
+    for (const selector of ["#react-input", "#react-textarea"]) {
+      const target = page.locator(selector);
+      await expect(target).toHaveValue("Before REPLACE after");
+      await target.evaluate((element) => {
+        const control = element as HTMLInputElement | HTMLTextAreaElement;
+        control.focus();
+        control.setSelectionRange(7, 14);
+      });
+      await openPromptMenu(page, page, app);
+      await insertTemplateFromMenu(page, "Summarize page");
+      await expect(target).toHaveValue("Before Summarize the key ideas from this page in concise bullets. after");
+      await page.keyboard.press("Control+z");
+      await expect(target).toHaveValue("Before REPLACE after");
+    }
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("computed editable targets accept legal attributes and reject noneditable islands", async (
+  { browserName }, testInfo,
+) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-editable-attributes"));
+  try {
+    await resetExtensionStorage(app.extensionId, app.context);
+    const page = await app.context.newPage();
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    await page.evaluate(() => {
+      const container = document.createElement("section");
+      container.innerHTML = '<div id="ce-bare" contenteditable>Before REPLACE after</div>' +
+        '<div id="ce-upper" contenteditable="TRUE">Before REPLACE after</div>' +
+        '<div id="ce-plain" contenteditable="plaintext-only">Before REPLACE after</div>' +
+        '<div id="ce-inherited" contenteditable=""><span>Before REPLACE after</span></div>' +
+        '<div id="ce-outer" contenteditable="true">Outer <div id="ce-blocked" contenteditable="false" tabindex="0">Locked ' +
+        '<div id="ce-reenabled" contenteditable="true" tabindex="0">Before REPLACE after</div></div></div>';
+      document.body.prepend(container);
+    });
+    const summary = "Summarize the key ideas from this page in concise bullets.";
+    for (const selector of ["#ce-bare", "#ce-upper", "#ce-plain", "#ce-inherited", "#ce-reenabled"]) {
+      const target = page.locator(selector);
+      await target.evaluate((element) => {
+        (element as HTMLElement).focus();
+        const text = element.querySelector("span")?.firstChild ?? element.firstChild!;
+        const range = document.createRange();
+        range.setStart(text, 7);
+        range.setEnd(text, 14);
+        document.getSelection()!.removeAllRanges();
+        document.getSelection()!.addRange(range);
+      });
+      // Evaluate the actual production probe as a serialized function, as executeScript does.
+      expect(await page.evaluate(detectFocusedInsertTarget)).toEqual({ hasFocusedInsertTarget: true });
+      await openPromptMenu(page, page, app);
+      await insertTemplateFromMenu(page, "Summarize page");
+      await expect(target).toHaveText(`Before ${summary} after`);
+    }
+    const protectedHtml = await page.locator("#ce-outer").innerHTML();
+    await page.locator("#ce-blocked").focus();
+    expect(await page.evaluate(detectFocusedInsertTarget)).toEqual({ hasFocusedInsertTarget: false });
+    await openPromptMenu(page, page, app);
+    await expectMenuText(page).toContain("Focus a text field before opening PromptCrate.");
+    await clickMenuButton(page, "Close");
+    await waitForMenuClosed(page);
+    expect(await page.locator("#ce-outer").innerHTML()).toBe(protectedHtml);
+
+    // A selection inside an immutable island must also be rejected if its editable parent retains focus.
+    await page.locator("#ce-outer").evaluate((element) => {
+      (element as HTMLElement).focus();
+      const range = document.createRange();
+      const text = element.querySelector("#ce-blocked")!.firstChild!;
+      range.setStart(text, 1);
+      range.collapse(true);
+      document.getSelection()!.removeAllRanges();
+      document.getSelection()!.addRange(range);
+    });
+    await openPromptMenu(page, page, app);
+    await expectMenuText(page).toContain("Focus a text field before opening PromptCrate.");
+    await clickMenuButton(page, "Close");
+    await waitForMenuClosed(page);
+    expect(await page.locator("#ce-outer").innerHTML()).toBe(protectedHtml);
+
+    // Editability can be revoked while the menu is open.
+    await page.locator("#ce-bare").focus();
+    const before = await page.locator("#ce-bare").innerHTML();
+    await openPromptMenu(page, page, app);
+    await page.locator("#ce-bare").evaluate((element) => element.setAttribute("contenteditable", "false"));
+    await chooseTemplateFromMenu(page, "Summarize page");
+    await expectMenuText(page).toContain("PromptCrate could not insert into this field.");
+    expect(await page.locator("#ce-bare").innerHTML()).toBe(before);
+    await clickMenuButton(page, "Close");
   } finally {
     await app.context.close();
   }

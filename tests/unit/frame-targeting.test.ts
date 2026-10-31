@@ -10,6 +10,33 @@ afterEach(() => {
 });
 
 describe("prompt menu frame targeting", () => {
+  it.each(["", "TRUE", "plaintext-only"])("uses computed editability for contenteditable=%s", (attribute) => {
+    const target = document.createElement("div");
+    target.setAttribute("contenteditable", attribute);
+    target.tabIndex = 0;
+    // jsdom lacks the browser's computed editability; E2E validates native inheritance.
+    Object.defineProperty(target, "isContentEditable", { value: true });
+    document.body.append(target);
+    target.focus();
+
+    expect(detectFocusedInsertTarget().hasFocusedInsertTarget).toBe(true);
+  });
+
+  it("rejects a focused noneditable island within an editable ancestor", () => {
+    const outer = document.createElement("div");
+    const blocked = document.createElement("div");
+    outer.setAttribute("contenteditable", "true");
+    blocked.setAttribute("contenteditable", "false");
+    blocked.tabIndex = 0;
+    Object.defineProperty(outer, "isContentEditable", { value: true });
+    Object.defineProperty(blocked, "isContentEditable", { value: false });
+    outer.append(blocked);
+    document.body.append(outer);
+    blocked.focus();
+
+    expect(detectFocusedInsertTarget().hasFocusedInsertTarget).toBe(false);
+  });
+
   it.each(["input", "textarea"] as const)("excludes readonly and disabled %s targets, including Shadow DOM", (tag) => {
     const host = document.createElement("div");
     const root = host.attachShadow({ mode: "open" });
