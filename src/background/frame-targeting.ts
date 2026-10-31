@@ -50,9 +50,8 @@ export function detectFocusedInsertTarget(): FocusedInsertProbe {
       );
     }
 
-    return Boolean(
-      element.closest('[contenteditable="true"], [contenteditable="plaintext-only"]'),
-    );
+    // This probe is serialized by executeScript, so it must not depend on imported helpers.
+    return element instanceof HTMLElement && element.isContentEditable;
   }
 }
 

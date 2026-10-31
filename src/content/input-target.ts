@@ -41,13 +41,14 @@ export function isTextControlTarget(
 }
 
 export function findEditableTarget(element: EventTarget | null): EditableTarget | null {
-  if (!(element instanceof Element)) {
+  if (!(element instanceof HTMLElement) || !element.isContentEditable) {
     return null;
   }
 
-  const editable = element.closest<HTMLElement>(
-    '[contenteditable="true"], [contenteditable="plaintext-only"]',
-  );
+  let editable = element;
+  while (editable.parentElement?.isContentEditable) {
+    editable = editable.parentElement;
+  }
 
   return editable;
 }
@@ -81,6 +82,13 @@ export function createSelectionTracker(
       return savedSelection;
     }
 
+    const selection = rootDocument.getSelection();
+    const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+    if (range && targetContainsNode(target, range.commonAncestorContainer) && !isEditableRange(target, range)) {
+      savedSelection = null;
+      return null;
+    }
+
     savedSelection = {
       kind: "contenteditable",
       target,
@@ -104,7 +112,8 @@ export function createSelectionTracker(
     const activeTarget = findInsertTarget(activeElement);
     if (
       !activeTarget &&
-      (activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement)
+      (activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement ||
+        activeElement?.closest("[contenteditable]"))
     ) {
       savedSelection = null;
     }
@@ -192,9 +201,18 @@ function insertIntoTextControl(
   const end = supportsSelection
     ? clampSelectionIndex(savedSelection.end, originalValue.length)
     : originalValue.length;
+  const nextValue = `${originalValue.slice(0, start)}${text}${originalValue.slice(end)}`;
+  // Native commands can report success after truncating (or rejecting) an oversized edit.
+  if (target.maxLength >= 0 && nextValue.length > target.maxLength) {
+    return false;
+  }
 
   try {
     target.focus();
+    if (supportsSelection) {
+      target.setSelectionRange(start, end);
+    }
+    // Chromium's insertText command emits input, but needs this separate cancelable check.
     if (
       !isTextControlTarget(target) ||
       !dispatchBeforeInputEvent(target, text) ||
@@ -204,10 +222,19 @@ function insertIntoTextControl(
       return false;
     }
 
-    setTextControlValue(
-      target,
-      `${originalValue.slice(0, start)}${text}${originalValue.slice(end)}`,
-    );
+    if (getDeepActiveElement(target.ownerDocument) !== target) {
+      return false;
+    }
+    // Page beforeinput handlers may have moved the caret; keep the user's saved insertion range.
+    if (supportsSelection) {
+      target.setSelectionRange(start, end);
+    }
+    // Email inputs cannot restore a caret, so keep their documented append fallback.
+    if (supportsSelection && tryExecCommandInsertText(target, text)) {
+      return true;
+    }
+
+    setTextControlValue(target, nextValue);
     const nextCaret = start + text.length;
     if (supportsSelection) {
       target.setSelectionRange(nextCaret, nextCaret);
@@ -227,16 +254,22 @@ function insertIntoContentEditable(
   const { target } = savedSelection;
   const originalHtml = target.innerHTML;
   const ownerDocument = target.ownerDocument;
+  if (!target.isContentEditable) {
+    return false;
+  }
 
   try {
     target.focus();
 
     const range = getUsableRange(savedSelection, target, ownerDocument);
+    if (!isEditableRange(target, range)) {
+      return false;
+    }
     const selection = ownerDocument.getSelection();
     selection?.removeAllRanges();
     selection?.addRange(range);
 
-    if (!dispatchBeforeInputEvent(target, text)) {
+    if (!dispatchBeforeInputEvent(target, text) || !target.isContentEditable || !isConnected(target)) {
       return false;
     }
 
@@ -245,8 +278,13 @@ function insertIntoContentEditable(
       return true;
     }
 
-    if (tryExecCommandInsertText(ownerDocument, text)) {
-      dispatchInputEvent(target, text);
+    if (getDeepActiveElement(ownerDocument) !== target || !isEditableRange(target, range)) {
+      return false;
+    }
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    if (tryExecCommandInsertText(target, text)) {
       return true;
     }
 
@@ -305,6 +343,13 @@ function targetContainsNode(target: EditableTarget, node: Node): boolean {
   return node === target || target.contains(node);
 }
 
+function isEditableRange(target: EditableTarget, range: Range): boolean {
+  return [range.startContainer, range.endContainer].every((node) => {
+    const element = node instanceof Element ? node : node.parentElement;
+    return targetContainsNode(target, node) && findEditableTarget(element) === target;
+  });
+}
+
 function isConnected(target: InsertTarget): boolean {
   return target.isConnected;
 }
@@ -358,10 +403,28 @@ function dispatchInputEvent(target: InsertTarget, text: string): void {
   target.dispatchEvent(event);
 }
 
-function tryExecCommandInsertText(ownerDocument: Document, text: string): boolean {
+function tryExecCommandInsertText(target: InsertTarget, text: string): boolean {
+  const readValue = () => target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
+    ? target.value
+    : target.innerHTML;
+  const originalValue = readValue();
+  let receivedInput = false;
+  const recordInput = () => { receivedInput = true; };
+  target.addEventListener("input", recordInput, true);
+  let didExecute = false;
   try {
-    return ownerDocument.execCommand?.("insertText", false, text) === true;
+    didExecute = target.ownerDocument.execCommand?.("insertText", false, text) === true;
   } catch {
-    return false;
+    // Some editors reject native commands; use the existing fallback if nothing was inserted.
+  } finally {
+    target.removeEventListener("input", recordInput, true);
   }
+  if (didExecute || receivedInput) {
+    return true;
+  }
+  if (readValue() !== originalValue) {
+    dispatchInputEvent(target, text);
+    return true;
+  }
+  return false;
 }

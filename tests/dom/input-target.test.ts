@@ -1,15 +1,38 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createSelectionTracker,
+  findEditableTarget,
   findInsertTarget,
   insertTextAtSavedSelection,
   SavedSelection,
 } from "../../src/content/input-target";
 
+const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
+
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  if (originalExecCommand) {
+    Object.defineProperty(document, "execCommand", originalExecCommand);
+  } else {
+    Reflect.deleteProperty(document, "execCommand");
+  }
   document.body.innerHTML = "";
 });
+
+function setComputedEditable(element: HTMLElement, value: boolean | (() => boolean)): void {
+  // jsdom does not calculate this browser property; native inheritance is covered by E2E.
+  Object.defineProperty(element, "isContentEditable", {
+    configurable: true,
+    get: typeof value === "function" ? value : () => value,
+  });
+}
+
+function mockExecCommand(implementation: (command: string, showUI?: boolean, value?: string) => boolean) {
+  const command = vi.fn(implementation);
+  Object.defineProperty(document, "execCommand", { configurable: true, value: command });
+  return command;
+}
 
 describe("DOM text insertion", () => {
   it("appends to email inputs without calling unsupported selection APIs", () => {
@@ -25,14 +48,274 @@ describe("DOM text insertion", () => {
       const setSelection = vi.spyOn(input, "setSelectionRange");
       const onInput = vi.fn();
       input.addEventListener("input", onInput);
+      const execCommand = mockExecCommand(() => { throw new Error("Unsupported email command"); });
 
       expect(insertTextAtSavedSelection(savedSelection, ".au")).toBe(true);
       expect(input.value).toBe("qa@example.test.au");
       expect(setSelection).not.toHaveBeenCalled();
       expect(onInput).toHaveBeenCalledOnce();
+      expect(execCommand).not.toHaveBeenCalled();
     } finally {
       tracker.destroy();
     }
+  });
+
+  it.each(["input", "textarea"] as const)("restores a saved %s selection for native editing and delivers one input event", (tag) => {
+    const target = document.createElement(tag);
+    target.value = "Before REPLACE after";
+    document.body.append(target);
+    target.setSelectionRange(0, 0);
+    const events: Event[] = [];
+    target.addEventListener("beforeinput", (event) => { events.push(event); });
+    target.addEventListener("input", (event) => { events.push(event); });
+    const nativeInput = new InputEvent("input", { bubbles: true, composed: true, inputType: "insertText", data: "inserted" });
+    const execCommand = mockExecCommand(() => {
+      expect(document.activeElement).toBe(target);
+      expect([target.selectionStart, target.selectionEnd]).toEqual([7, 14]);
+      target.setRangeText("inserted", 7, 14, "end");
+      target.dispatchEvent(nativeInput);
+      return true;
+    });
+
+    expect(insertTextAtSavedSelection({ kind: "text-control", target, start: 7, end: 14 }, "inserted")).toBe(true);
+    expect(execCommand).toHaveBeenCalledOnce();
+    expect(execCommand).toHaveBeenCalledWith("insertText", false, "inserted");
+    expect(target.value).toBe("Before inserted after");
+    expect(events.map((event) => event.type)).toEqual(["beforeinput", "input"]);
+    expect(events[0]).toMatchObject({ bubbles: true, composed: true, cancelable: true });
+    expect(events[1]).toBe(nativeInput);
+  });
+
+  it.each(["input", "textarea"] as const)("keeps the saved %s replacement range when beforeinput moves the caret", (tag) => {
+    const target = document.createElement(tag);
+    target.value = "Before REPLACE after";
+    document.body.append(target);
+    target.addEventListener("beforeinput", () => {
+      target.setSelectionRange(target.value.length, target.value.length);
+    });
+    let nativeSelection: (number | null)[] = [];
+    mockExecCommand(() => {
+      nativeSelection = [target.selectionStart, target.selectionEnd];
+      target.setRangeText("inserted", target.selectionStart!, target.selectionEnd!, "end");
+      target.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertText", data: "inserted" }));
+      return true;
+    });
+
+    expect(insertTextAtSavedSelection({ kind: "text-control", target, start: 7, end: 14 }, "inserted")).toBe(true);
+    expect(nativeSelection).toEqual([7, 14]);
+    expect(target.value).toBe("Before inserted after");
+  });
+
+  it.each(["input", "textarea"] as const)("rejects an oversized %s insertion before changing the field", (tag) => {
+    const target = document.createElement(tag);
+    target.value = "abcde";
+    target.maxLength = 5;
+    document.body.append(target);
+    const execCommand = mockExecCommand(() => true);
+    const onInput = vi.fn();
+    target.addEventListener("input", onInput);
+
+    expect(insertTextAtSavedSelection({ kind: "text-control", target, start: 2, end: 3 }, "XY")).toBe(false);
+    expect(target.value).toBe("abcde");
+    expect(execCommand).not.toHaveBeenCalled();
+    expect(onInput).not.toHaveBeenCalled();
+  });
+
+  it.each(["input", "textarea"] as const)("allows a %s replacement that exactly fits maxlength", (tag) => {
+    const target = document.createElement(tag);
+    target.value = "abcde";
+    target.maxLength = 6;
+    document.body.append(target);
+    const execCommand = mockExecCommand(() => {
+      target.setRangeText("XY", target.selectionStart!, target.selectionEnd!, "end");
+      target.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertText", data: "XY" }));
+      return true;
+    });
+
+    expect(insertTextAtSavedSelection({ kind: "text-control", target, start: 4, end: 5 }, "XY")).toBe(true);
+    expect(target.value).toBe("abcdXY");
+    expect(execCommand).toHaveBeenCalledOnce();
+  });
+
+  it.each(["false", "throw"] as const)("falls back without duplicate events when the editing command returns %s", (outcome) => {
+    const target = document.createElement("textarea");
+    target.value = "Before REPLACE after";
+    document.body.append(target);
+    const onInput = vi.fn();
+    const onBeforeInput = vi.fn();
+    target.addEventListener("input", onInput);
+    target.addEventListener("beforeinput", onBeforeInput);
+    const execCommand = mockExecCommand(() => {
+      if (outcome === "throw") {
+        throw new Error("Native editing unavailable");
+      }
+      return false;
+    });
+
+    expect(insertTextAtSavedSelection({ kind: "text-control", target, start: 7, end: 14 }, "inserted")).toBe(true);
+    expect(target.value).toBe("Before inserted after");
+    expect(execCommand).toHaveBeenCalledOnce();
+    expect(onBeforeInput).toHaveBeenCalledOnce();
+    expect(onInput).toHaveBeenCalledOnce();
+    expect(target.selectionStart).toBe(15);
+  });
+
+  it("does not run native editing when beforeinput is canceled", () => {
+    const target = document.createElement("textarea");
+    target.value = "Keep this";
+    document.body.append(target);
+    const execCommand = mockExecCommand(() => true);
+    const onInput = vi.fn();
+    target.addEventListener("beforeinput", (event) => event.preventDefault());
+    target.addEventListener("input", onInput);
+
+    expect(insertTextAtSavedSelection({ kind: "text-control", target, start: 0, end: 4 }, "Replace")).toBe(false);
+    expect(target.value).toBe("Keep this");
+    expect(execCommand).not.toHaveBeenCalled();
+    expect(onInput).not.toHaveBeenCalled();
+  });
+
+  it.each(["false", "throw"] as const)("does not repeat an edit already delivered when the native command ends with %s", (outcome) => {
+    const target = document.createElement("textarea");
+    target.value = "Before REPLACE after";
+    document.body.append(target);
+    const onInput = vi.fn();
+    target.addEventListener("input", onInput);
+    mockExecCommand(() => {
+      target.setRangeText("inserted", 7, 14, "end");
+      target.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertText", data: "inserted" }));
+      if (outcome === "throw") {
+        throw new Error("Command failed after delivering its edit");
+      }
+      return false;
+    });
+
+    expect(insertTextAtSavedSelection({ kind: "text-control", target, start: 7, end: 14 }, "inserted")).toBe(true);
+    expect(target.value).toBe("Before inserted after");
+    expect(onInput).toHaveBeenCalledOnce();
+  });
+
+  it("finds the contiguous editable root and stops at a noneditable island", () => {
+    const outer = document.createElement("div");
+    const inherited = document.createElement("span");
+    const blocked = document.createElement("div");
+    const reenabled = document.createElement("div");
+    const child = document.createElement("span");
+    outer.setAttribute("contenteditable", "");
+    blocked.setAttribute("contenteditable", "false");
+    reenabled.setAttribute("contenteditable", "true");
+    setComputedEditable(outer, true);
+    setComputedEditable(inherited, true);
+    setComputedEditable(blocked, false);
+    setComputedEditable(reenabled, true);
+    setComputedEditable(child, true);
+    outer.append(inherited, blocked);
+    blocked.append(reenabled);
+    reenabled.append(child);
+    document.body.append(outer);
+
+    expect(findEditableTarget(inherited)).toBe(outer);
+    expect(findInsertTarget(blocked)).toBeNull();
+    expect(findEditableTarget(child)).toBe(reenabled);
+  });
+
+  it("clears an earlier saved text control when a noneditable island gains focus", () => {
+    const input = document.createElement("input");
+    const outer = document.createElement("div");
+    const blocked = document.createElement("div");
+    outer.setAttribute("contenteditable", "true");
+    blocked.setAttribute("contenteditable", "false");
+    blocked.tabIndex = 0;
+    setComputedEditable(outer, true);
+    setComputedEditable(blocked, false);
+    outer.append(blocked);
+    document.body.append(input, outer);
+    const tracker = createSelectionTracker();
+    try {
+      input.focus();
+      expect(tracker.getSavedSelection()?.target).toBe(input);
+      blocked.focus();
+      expect(tracker.rememberCurrentSelection()).toBeNull();
+      expect(tracker.getSavedSelection()).toBeNull();
+    } finally {
+      tracker.destroy();
+    }
+  });
+
+  it.each([false, true])("rejects contenteditable revoked during beforeinput: %s", (duringEvent) => {
+    const target = document.createElement("div");
+    target.setAttribute("contenteditable", "true");
+    target.tabIndex = 0;
+    target.textContent = "Keep this";
+    let editable = duringEvent;
+    setComputedEditable(target, () => editable);
+    document.body.append(target);
+    const execCommand = mockExecCommand(() => true);
+    const onInput = vi.fn();
+    const onBeforeInput = vi.fn(() => { editable = false; });
+    target.addEventListener("beforeinput", onBeforeInput);
+    target.addEventListener("input", onInput);
+
+    expect(insertTextAtSavedSelection({ kind: "contenteditable", target, range: null }, "Replace")).toBe(false);
+    expect(target.textContent).toBe("Keep this");
+    expect(execCommand).not.toHaveBeenCalled();
+    expect(onInput).not.toHaveBeenCalled();
+    expect(onBeforeInput).toHaveBeenCalledTimes(duringEvent ? 1 : 0);
+  });
+
+  it("uses contenteditable native input without dispatching it twice", () => {
+    const target = document.createElement("div");
+    target.setAttribute("contenteditable", "true");
+    target.tabIndex = 0;
+    target.textContent = "Original";
+    setComputedEditable(target, true);
+    document.body.append(target);
+    const events: Event[] = [];
+    target.addEventListener("beforeinput", (event) => { events.push(event); });
+    target.addEventListener("input", (event) => { events.push(event); });
+    const nativeInput = new InputEvent("input", { bubbles: true, composed: true, inputType: "insertText", data: "Inserted" });
+    mockExecCommand(() => {
+      target.textContent = "OriginalInserted";
+      target.dispatchEvent(nativeInput);
+      return true;
+    });
+
+    expect(insertTextAtSavedSelection({ kind: "contenteditable", target, range: null }, "Inserted")).toBe(true);
+    expect(target.textContent).toBe("OriginalInserted");
+    expect(events.map((event) => event.type)).toEqual(["beforeinput", "input"]);
+    expect(events[1]).toBe(nativeInput);
+  });
+
+  it("keeps the saved contenteditable range when beforeinput moves the selection", () => {
+    const target = document.createElement("div");
+    target.setAttribute("contenteditable", "true");
+    target.tabIndex = 0;
+    target.textContent = "Before REPLACE after";
+    setComputedEditable(target, true);
+    document.body.append(target);
+    const range = document.createRange();
+    range.setStart(target.firstChild!, 7);
+    range.setEnd(target.firstChild!, 14);
+    target.addEventListener("beforeinput", () => {
+      const movedRange = document.createRange();
+      movedRange.selectNodeContents(target);
+      movedRange.collapse(false);
+      document.getSelection()!.removeAllRanges();
+      document.getSelection()!.addRange(movedRange);
+    });
+    let replacedText = "";
+    mockExecCommand(() => {
+      const nativeRange = document.getSelection()!.getRangeAt(0);
+      replacedText = nativeRange.toString();
+      nativeRange.deleteContents();
+      nativeRange.insertNode(document.createTextNode("inserted"));
+      target.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertText", data: "inserted" }));
+      return true;
+    });
+
+    expect(insertTextAtSavedSelection({ kind: "contenteditable", target, range }, "inserted")).toBe(true);
+    expect(replacedText).toBe("REPLACE");
+    expect(target.textContent).toBe("Before inserted after");
   });
 
   it.each(["input", "textarea"] as const)("rejects blocked %s targets and clears an earlier saved target", (tag) => {
@@ -241,6 +524,7 @@ describe("DOM text insertion", () => {
   it("inserts into contenteditable at the saved range", () => {
     const editable = document.createElement("div");
     editable.setAttribute("contenteditable", "true");
+    setComputedEditable(editable, true);
     editable.textContent = "hello world";
     document.body.append(editable);
     const textNode = editable.firstChild;
