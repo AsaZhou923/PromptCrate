@@ -9,8 +9,9 @@ describe("message contract", () => {
     expect(MESSAGE_TYPE.OPEN_PROMPT_MENU).toBe("OPEN_PROMPT_MENU");
   });
 
-  it("exposes the insert command", () => {
-    expect(MESSAGE_TYPE.INSERT_RENDERED_TEMPLATE).toBe("INSERT_RENDERED_TEMPLATE");
+  it("exposes template read and mutation requests", () => {
+    expect(MESSAGE_TYPE.READ_TEMPLATES).toBe("READ_TEMPLATES");
+    expect(MESSAGE_TYPE.MUTATE_TEMPLATES).toBe("MUTATE_TEMPLATES");
   });
 
   it("exposes the templates updated broadcast", () => {

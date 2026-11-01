@@ -4,7 +4,7 @@ import {
   SavedSelection,
 } from "./input-target";
 import { MESSAGE_TYPE, isRuntimeMessage } from "../shared/message-contract";
-import { readPromptTemplates, writePromptTemplates } from "../shared/storage";
+import { loadPromptTemplates, commitTemplateMutation } from "../shared/template-client";
 import {
   extractTemplateVariables,
   PromptTemplate,
@@ -12,7 +12,6 @@ import {
   searchTemplates,
   sortTemplatesForMenu,
   TemplateVariable,
-  touchTemplateLastUsed,
 } from "../shared/templates";
 
 declare global {
@@ -136,7 +135,7 @@ if (!window.__promptCrateContentEntryLoaded) {
     }
 
     try {
-      const templates = await readPromptTemplates();
+      const templates = await loadPromptTemplates();
       // A close or a newer open may have replaced this request while storage was loading.
       if (state !== openingState) {
         return;
@@ -158,14 +157,18 @@ if (!window.__promptCrateContentEntryLoaded) {
     }
 
     const currentState = state;
-    const templates = await readPromptTemplates();
-    if (state !== currentState) {
-      return;
-    }
+    try {
+      const templates = await loadPromptTemplates();
+      if (state !== currentState) {
+        return;
+      }
 
-    currentState.templates = sortTemplatesForMenu(templates);
-    if (!currentState.chosenTemplate && !currentState.isComposing) {
-      updateTemplateResults();
+      currentState.templates = sortTemplatesForMenu(templates);
+      if (!currentState.chosenTemplate && !currentState.isComposing) {
+        updateTemplateResults();
+      }
+    } catch (error) {
+      console.warn("[prompt-crate] Could not refresh templates", error);
     }
   }
 
@@ -694,6 +697,9 @@ if (!window.__promptCrateContentEntryLoaded) {
       const rendered = renderTemplate(state.chosenTemplate.body, state.values);
       await insertRenderedTemplate(state.chosenTemplate, rendered);
     } catch (error) {
+      if (!state) {
+        return;
+      }
       state.error = error instanceof Error ? error.message : String(error);
       renderMenu();
     }
@@ -715,13 +721,10 @@ if (!window.__promptCrateContentEntryLoaded) {
       return;
     }
 
-    const currentTemplates = await readPromptTemplates();
-    const nextTemplates = currentTemplates.map((item) =>
-      item.id === template.id ? touchTemplateLastUsed(item) : item,
-    );
-    await writePromptTemplates(nextTemplates);
-    state.templates = sortTemplatesForMenu(nextTemplates);
     closeMenu();
+    void commitTemplateMutation({ kind: "touch", id: template.id }).catch((error: unknown) => {
+      console.warn("[prompt-crate] Could not record template usage", error);
+    });
   }
 
   function getFilteredTemplates(): PromptTemplate[] {

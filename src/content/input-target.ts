@@ -22,7 +22,6 @@ const TEXT_INPUT_TYPES = new Set([
   "email",
   "url",
   "tel",
-  "password",
 ]);
 
 export function isTextControlTarget(

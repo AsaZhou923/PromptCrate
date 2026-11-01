@@ -361,6 +361,5 @@ export function touchTemplateLastUsed(
   return {
     ...template,
     lastUsedAt: now,
-    updatedAt: now,
   };
 }
