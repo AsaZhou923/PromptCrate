@@ -1,19 +1,19 @@
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
-  applyTemplateImport,
   createTemplateExportPayload,
   parseTemplateImportJson,
   TemplateExportPayload,
 } from "../shared/import-export";
-import { MESSAGE_TYPE } from "../shared/message-contract";
-import { readPromptTemplates, writePromptTemplates } from "../shared/storage";
+import { loadPromptTemplates, commitTemplateMutation } from "../shared/template-client";
+import { sameTemplateRevision, type TemplateMutation, type MutationResult } from "../shared/template-mutations";
 import {
   normalizeTags,
   normalizeTemplate,
   PromptTemplate,
   searchTemplates,
   sortTemplatesForMenu,
+  STORAGE_KEYS,
   validateTemplate,
 } from "../shared/templates";
 
@@ -33,26 +33,90 @@ const EMPTY_FORM: TemplateFormState = {
   isFavorite: false,
 };
 
+type EditorState = {
+  selectedId: string | null;
+  form: TemplateFormState;
+  baseline: PromptTemplate | null;
+};
+
+const EMPTY_EDITOR: EditorState = { selectedId: null, form: EMPTY_FORM, baseline: null };
+
 function OptionsApp() {
   const [templates, setTemplates] = useState<PromptTemplate[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [form, setForm] = useState<TemplateFormState>(EMPTY_FORM);
+  const [editor, setEditor] = useState<EditorState>(EMPTY_EDITOR);
+  const { selectedId, form, baseline } = editor;
+  const editorRef = useRef(editor);
+  const writingRef = useRef(false);
+  const [saving, setSaving] = useState(false);
+  const refreshRef = useRef<() => Promise<void>>(async () => {});
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("Loading templates...");
   const [error, setError] = useState<string | null>(null);
   const [pendingImport, setPendingImport] = useState<TemplateExportPayload | null>(null);
 
   useEffect(() => {
-    void readPromptTemplates()
-      .then((items) => {
+    let mounted = true;
+    let sequence = 0;
+    const refresh = async () => {
+      const request = ++sequence;
+      try {
+        const items = await loadPromptTemplates();
+        if (!mounted || request !== sequence) {
+          return;
+        }
         setTemplates(items);
-        setStatus(`${items.length} templates loaded.`);
-      })
-      .catch((caughtError: unknown) => {
-        setError(getErrorMessage(caughtError));
-        setStatus("Could not load templates.");
-      });
+        setStatus((current) => current === "Loading templates..." || current === "Could not load templates."
+          ? `${items.length} templates loaded.` : current);
+        const current = editorRef.current;
+        if (writingRef.current || !current.selectedId) {
+          return;
+        }
+        const latest = items.find((item) => item.id === current.selectedId);
+        if (sameTemplateRevision(latest, current.baseline)) {
+          return;
+        }
+        const originalForm = current.baseline ? templateToForm(current.baseline) : EMPTY_FORM;
+        if (JSON.stringify(current.form) === JSON.stringify(originalForm)) {
+          replaceEditor(latest
+            ? { selectedId: latest.id, form: templateToForm(latest), baseline: latest }
+            : EMPTY_EDITOR);
+          setError(null);
+        } else {
+          setError(latest
+            ? "Template changed in another tab. Your draft is preserved. Reselect the template to load the latest version before saving."
+            : "Template was deleted in another tab. Your draft is preserved. Use Keep as new to save a copy.");
+        }
+      } catch (caughtError) {
+        if (mounted && request === sequence) {
+          setError(getErrorMessage(caughtError));
+          setStatus((current) => current === "Loading templates..." ? "Could not load templates." : current);
+        }
+      }
+    };
+    const onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area === "local" && STORAGE_KEYS.templates in changes) {
+        void refresh();
+      }
+    };
+    refreshRef.current = () => refresh();
+    chrome.storage.onChanged.addListener(onChanged);
+    void refresh();
+    return () => {
+      mounted = false;
+      sequence += 1;
+      chrome.storage.onChanged.removeListener(onChanged);
+    };
   }, []);
+
+  function replaceEditor(next: EditorState): void {
+    editorRef.current = next;
+    setEditor(next);
+  }
+
+  function setForm(update: (current: TemplateFormState) => TemplateFormState): void {
+    const current = editorRef.current;
+    replaceEditor({ ...current, form: update(current.form) });
+  }
 
   const selectedTemplate = useMemo(
     () => templates.find((template) => template.id === selectedId) ?? null,
@@ -63,16 +127,15 @@ function OptionsApp() {
     () => sortTemplatesForMenu(searchTemplates(templates, query)),
     [query, templates],
   );
+  const hasConflict = baseline !== null && !sameTemplateRevision(selectedTemplate, baseline);
 
   function selectTemplate(template: PromptTemplate): void {
-    setSelectedId(template.id);
-    setForm(templateToForm(template));
+    replaceEditor({ selectedId: template.id, form: templateToForm(template), baseline: template });
     setError(null);
   }
 
   function startNewTemplate(): void {
-    setSelectedId(null);
-    setForm(EMPTY_FORM);
+    replaceEditor(EMPTY_EDITOR);
     setError(null);
     setStatus("New template.");
   }
@@ -81,17 +144,14 @@ function OptionsApp() {
     event.preventDefault();
 
     const now = new Date().toISOString();
-    const existing = selectedTemplate;
+    const existing = baseline;
     if (selectedId && !existing) {
       setError("Selected template no longer exists. Select a template or create a new one.");
       return;
     }
 
     const candidate = normalizeTemplate({
-      id: form.id.trim() || createUniqueTemplateId(
-        createTemplateId(form.title),
-        templates.filter((template) => template.id !== selectedId),
-      ),
+      id: form.id.trim() || createTemplateId(form.title),
       title: form.title,
       body: form.body,
       tags: normalizeTags(splitTags(form.tags)),
@@ -112,26 +172,22 @@ function OptionsApp() {
       (template) => template.id === candidate.id && template.id !== selectedId,
     );
 
-    if (duplicate) {
+    if (form.id.trim() && duplicate) {
       setError("Template ID already exists.");
       return;
     }
 
-    const nextTemplates = selectedId
-      ? templates.map((template) =>
-          template.id === selectedId ? candidate : template,
-        )
-      : [...templates, candidate];
-
-    if (!await persistTemplates(nextTemplates, `Saved "${candidate.title}".`)) {
-      return;
-    }
-    setSelectedId(candidate.id);
-    setForm(templateToForm(candidate));
+    await persistMutation({
+      kind: "save", template: candidate, previous: existing,
+      autoId: form.id.trim() ? undefined : createTemplateId(form.title),
+    }, () => `Saved "${candidate.title}".`, (result) => {
+      const saved = result.templates.find((item) => item.id === result.savedId)!;
+      replaceEditor({ selectedId: saved.id, form: templateToForm(saved), baseline: saved });
+    });
   }
 
   async function deleteTemplate(): Promise<void> {
-    if (!selectedTemplate) {
+    if (!selectedTemplate || !baseline) {
       return;
     }
 
@@ -139,12 +195,8 @@ function OptionsApp() {
       return;
     }
 
-    const nextTemplates = templates.filter((template) => template.id !== selectedTemplate.id);
-    if (!await persistTemplates(nextTemplates, `Deleted "${selectedTemplate.title}".`)) {
-      return;
-    }
-    setSelectedId(null);
-    setForm(EMPTY_FORM);
+    await persistMutation({ kind: "delete", previous: baseline },
+      () => `Deleted "${selectedTemplate.title}".`, () => replaceEditor(EMPTY_EDITOR));
   }
 
   async function duplicateTemplate(): Promise<void> {
@@ -155,20 +207,19 @@ function OptionsApp() {
     const now = new Date().toISOString();
     const copy: PromptTemplate = {
       ...selectedTemplate,
-      id: createUniqueTemplateId(`${selectedTemplate.id}-copy`, templates),
+      id: `${selectedTemplate.id}-copy`,
       title: `${selectedTemplate.title} copy`,
       isFavorite: false,
       createdAt: now,
       updatedAt: now,
       lastUsedAt: undefined,
     };
-    const nextTemplates = [...templates, copy];
-
-    if (!await persistTemplates(nextTemplates, `Copied "${selectedTemplate.title}".`)) {
-      return;
-    }
-    setSelectedId(copy.id);
-    setForm(templateToForm(copy));
+    await persistMutation({
+      kind: "save", template: copy, previous: null, autoId: `${selectedTemplate.id}-copy`,
+    }, () => `Copied "${selectedTemplate.title}".`, (result) => {
+      const saved = result.templates.find((item) => item.id === result.savedId)!;
+      replaceEditor({ selectedId: saved.id, form: templateToForm(saved), baseline: saved });
+    });
   }
 
   function exportTemplates(): void {
@@ -217,39 +268,43 @@ function OptionsApp() {
       return;
     }
 
-    const result = applyTemplateImport(templates, pendingImport.templates, mode);
-    const imported = await persistTemplates(
-      result.templates,
-      result.overwritten
+    await persistMutation({ kind: "import", templates: pendingImport.templates, mode, expected: templates },
+      (result) => result.overwritten
         ? `Imported ${result.added} templates by overwrite.`
         : `Imported ${result.added} new and ${result.updated} updated templates.`,
-    );
-    if (!imported) {
-      return;
-    }
-
-    const nextSelectedTemplate = result.templates.find((template) => template.id === selectedId);
-    setSelectedId(nextSelectedTemplate?.id ?? null);
-    setForm(nextSelectedTemplate ? templateToForm(nextSelectedTemplate) : EMPTY_FORM);
-    setPendingImport(null);
+      (result) => {
+        const selected = result.templates.find((template) => template.id === selectedId);
+        replaceEditor(selected
+          ? { selectedId: selected.id, form: templateToForm(selected), baseline: selected }
+          : EMPTY_EDITOR);
+        setPendingImport(null);
+      });
   }
 
-  async function persistTemplates(
-    nextTemplates: PromptTemplate[],
-    message: string,
-  ): Promise<boolean> {
+  async function persistMutation(
+    mutation: TemplateMutation,
+    message: (result: MutationResult) => string,
+    onSuccess: (result: MutationResult) => void,
+  ): Promise<void> {
+    if (writingRef.current) {
+      return;
+    }
+    writingRef.current = true;
+    setSaving(true);
     setError(null);
 
     try {
-      await writePromptTemplates(nextTemplates);
-      setTemplates(nextTemplates);
-      setStatus(message);
-      await notifyTemplatesUpdated();
-      return true;
+      const result = await commitTemplateMutation(mutation);
+      setTemplates(result.templates);
+      onSuccess(result);
+      setStatus(message(result));
     } catch (caughtError) {
       setError(getErrorMessage(caughtError));
       setStatus("Save failed.");
-      return false;
+    } finally {
+      writingRef.current = false;
+      setSaving(false);
+      void refreshRef.current();
     }
   }
 
@@ -260,7 +315,7 @@ function OptionsApp() {
       <aside className="sidebar" aria-label="Templates">
         <div className="toolbar">
           <h1>PromptCrate</h1>
-          <button type="button" onClick={startNewTemplate}>
+          <button type="button" disabled={saving} onClick={startNewTemplate}>
             New
           </button>
         </div>
@@ -284,6 +339,7 @@ function OptionsApp() {
                 }
                 key={template.id}
                 type="button"
+                disabled={saving}
                 onClick={() => selectTemplate(template)}
               >
                 <span className="row-title">
@@ -302,14 +358,14 @@ function OptionsApp() {
           </button>
           <label className="file-button">
             Import JSON
-            <input type="file" accept="application/json" onChange={handleImportFile} />
+            <input type="file" disabled={saving} accept="application/json" onChange={handleImportFile} />
           </label>
           {pendingImport ? (
             <div className="import-actions">
-              <button type="button" onClick={() => void applyPendingImport("merge")}>
+              <button type="button" disabled={saving} onClick={() => void applyPendingImport("merge")}>
                 Merge
               </button>
-              <button type="button" onClick={() => void applyPendingImport("overwrite")}>
+              <button type="button" disabled={saving} onClick={() => void applyPendingImport("overwrite")}>
                 Overwrite
               </button>
             </div>
@@ -319,6 +375,7 @@ function OptionsApp() {
 
       <section className="editor" aria-label="Template editor">
         <form onSubmit={(event) => void saveTemplate(event)}>
+          <fieldset className="editor-fields" disabled={saving}>
           <div className="editor-header">
             <div>
               <h2>{selectedTemplate ? "Edit template" : "New template"}</h2>
@@ -328,6 +385,15 @@ function OptionsApp() {
             </div>
 
             <div className="editor-actions">
+              {hasConflict ? (
+                <button type="button" onClick={() => {
+                  replaceEditor({ selectedId: null, baseline: null, form: { ...form, id: "" } });
+                  setError(null);
+                  setStatus("Draft kept as a new template. Click Save to create it.");
+                }}>
+                  Keep as new
+                </button>
+              ) : null}
               <button
                 type="button"
                 disabled={!selectedTemplate}
@@ -419,6 +485,7 @@ function OptionsApp() {
               />
             </label>
           </div>
+          </fieldset>
         </form>
       </section>
     </main>
@@ -449,27 +516,6 @@ function createTemplateId(title: string): string {
   return slug || `template-${Date.now()}`;
 }
 
-function createUniqueTemplateId(baseId: string, templates: PromptTemplate[]): string {
-  const existingIds = new Set(templates.map((template) => template.id));
-  let candidate = baseId;
-  let suffix = 2;
-
-  while (existingIds.has(candidate)) {
-    candidate = `${baseId}-${suffix}`;
-    suffix += 1;
-  }
-
-  return candidate;
-}
-
-async function notifyTemplatesUpdated(): Promise<void> {
-  try {
-    await chrome.runtime.sendMessage({ type: MESSAGE_TYPE.TEMPLATES_UPDATED });
-  } catch {
-    return;
-  }
-}
-
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -488,6 +534,13 @@ const OPTIONS_STYLES = `
 
   body {
     margin: 0;
+  }
+
+  .editor-fields {
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
   }
 
   button,

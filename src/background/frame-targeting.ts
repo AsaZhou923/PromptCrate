@@ -15,7 +15,6 @@ export function detectFocusedInsertTarget(): FocusedInsertProbe {
     "email",
     "url",
     "tel",
-    "password",
   ]);
   const activeElement = getDeepActiveElement(document);
 

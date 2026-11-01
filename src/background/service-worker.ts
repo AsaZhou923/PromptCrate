@@ -4,23 +4,48 @@ import {
   selectPromptMenuFrameIds,
 } from "./frame-targeting";
 import { MESSAGE_TYPE, isRuntimeMessage } from "../shared/message-contract";
-import { initializePromptCrateStorage } from "../shared/storage";
+import { createTemplateStore } from "./template-store";
+import { isTemplateMutation } from "../shared/template-mutations";
 
 const OPEN_PROMPT_COMMAND = "open-prompt-menu";
 const CONTENT_SCRIPT_FILE = "content-entry.js";
+const templateStore = createTemplateStore();
 
 chrome.runtime.onInstalled.addListener(() => {
-  void initializePromptCrateStorage().catch((error: unknown) => {
+  void templateStore.read().catch((error: unknown) => {
     console.error("[prompt-crate] Failed to initialize templates", error);
   });
 });
 
-chrome.runtime.onMessage.addListener((message: unknown) => {
-  if (!isRuntimeMessage(message) || message.type !== MESSAGE_TYPE.TEMPLATES_UPDATED) {
+chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
+  if (!isRuntimeMessage(message)) {
     return;
   }
-
-  void broadcastTemplatesUpdated();
+  if (message.type === MESSAGE_TYPE.READ_TEMPLATES) {
+    void templateStore.read().then((templates) => sendResponse({ ok: true, templates }))
+      .catch((error: unknown) => sendResponse({ ok: false, error: getErrorMessage(error) }));
+    return true;
+  }
+  if (message.type === MESSAGE_TYPE.MUTATE_TEMPLATES) {
+    const mutation = "mutation" in message ? message.mutation : undefined;
+    if (!isTemplateMutation(mutation)) {
+      sendResponse({ ok: false, error: "Invalid template mutation." });
+      return;
+    }
+    void templateStore.mutate(mutation).then((result) => {
+      sendResponse({ ok: true, ...result });
+      // Notifications are best effort after the committed operation has been acknowledged.
+      void broadcastTemplatesUpdated().catch((error: unknown) => {
+        console.warn("[prompt-crate] Could not broadcast updated templates", getErrorMessage(error));
+      });
+    }).catch((error: unknown) => sendResponse({ ok: false, error: getErrorMessage(error) }));
+    return true;
+  }
+  if (message.type === MESSAGE_TYPE.TEMPLATES_UPDATED) {
+    void broadcastTemplatesUpdated().catch((error: unknown) => {
+      console.warn("[prompt-crate] Could not broadcast updated templates", getErrorMessage(error));
+    });
+  }
 });
 
 chrome.commands.onCommand.addListener((command) => {

@@ -592,6 +592,223 @@ test("computed editable targets accept legal attributes and reject noneditable i
   }
 });
 
+test("Options tabs preserve unrelated edits, report conflicts, and keep drafts as new templates", async (
+  { browserName }, testInfo,
+) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-concurrent-options"));
+  try {
+    const first = await resetExtensionStorage(app.extensionId, app.context);
+    const second = await app.context.newPage();
+    await second.goto(`chrome-extension://${app.extensionId}/options.html`);
+    await expect(second.locator(".status")).toContainText("templates loaded.");
+    await second.getByRole("button", { name: /Compare options/ }).click();
+    await second.getByLabel("Body").fill("Pending draft from tab two");
+    await first.getByRole("button", { name: "New", exact: true }).click();
+    await first.getByLabel("Title").fill("Created in tab one");
+    await first.getByLabel("Body").fill("Body from tab one");
+    await first.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(first.locator(".status")).toContainText('Saved "Created in tab one".');
+    await expect(second.getByRole("button", { name: /Created in tab one/ })).toBeVisible();
+    await expect(second.getByLabel("Body")).toHaveValue("Pending draft from tab two");
+    await second.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(second.locator(".status")).toContainText('Saved "Compare options".');
+    expect((await readTemplates(second)).find((item) => item.id === "created-in-tab-one")?.body).toBe("Body from tab one");
+
+    for (const tab of [first, second]) {
+      await tab.getByRole("button", { name: /Rewrite clearer/ }).click();
+    }
+    await second.getByLabel("Body").fill("Unsaved conflicting draft");
+    await first.getByLabel("Body").fill("Newer stored revision");
+    await first.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(first.locator(".status")).toContainText('Saved "Rewrite clearer".');
+    await expect(second.locator(".status.error")).toContainText("another tab");
+    await expect(second.getByLabel("Body")).toHaveValue("Unsaved conflicting draft");
+    await second.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(second.locator(".status.error")).toContainText("another tab");
+    expect((await readTemplates(second)).find((item) => item.id === "rewrite-clearer")?.body).toBe("Newer stored revision");
+    const screenshotPath = testInfo.outputPath("options-conflict.png");
+    await second.screenshot({ path: screenshotPath, fullPage: true });
+    await testInfo.attach("options-conflict", { path: screenshotPath, contentType: "image/png" });
+    await second.getByRole("button", { name: "Keep as new", exact: true }).click();
+    await expect(second.getByLabel("Body")).toHaveValue("Unsaved conflicting draft");
+    await second.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(second.locator(".status")).toContainText('Saved "Rewrite clearer".');
+    await expect(second.getByLabel("ID", { exact: true })).toHaveValue("rewrite-clearer-2");
+    expect((await readTemplates(second)).find((item) => item.id === "rewrite-clearer-2")?.body).toBe("Unsaved conflicting draft");
+
+    for (const tab of [first, second]) {
+      await tab.getByRole("button", { name: "New", exact: true }).click();
+      await tab.getByLabel("Title").fill("Concurrent new");
+      await tab.getByLabel("Body").fill("Concurrent body");
+    }
+    await Promise.all([first, second].map((tab) => tab.getByRole("button", { name: "Save", exact: true }).click()));
+    for (const tab of [first, second]) {
+      await expect(tab.locator(".status")).toContainText('Saved "Concurrent new".');
+    }
+    expect((await readTemplates(first)).filter((item) => item.title === "Concurrent new").map((item) => item.id).sort())
+      .toEqual(["concurrent-new", "concurrent-new-2"]);
+
+    for (const tab of [first, second]) {
+      await tab.getByRole("button", { name: /Draft reply/ }).click();
+    }
+    await second.getByLabel("Body").fill("Keep this deleted template draft");
+    first.once("dialog", (dialog) => void dialog.accept());
+    await first.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(first.locator(".status")).toContainText('Deleted "Draft reply".');
+    await expect(second.locator(".status.error")).toContainText("deleted");
+    await expect(second.getByLabel("Body")).toHaveValue("Keep this deleted template draft");
+    await second.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(second.locator(".status.error")).toContainText("deleted");
+    expect((await readTemplates(second)).some((item) => item.id === "draft-reply")).toBe(false);
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("usage updates preserve pending Options drafts and survive the next save", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-usage-save"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    const before = (await readTemplates(options)).find((item) => item.id === "rewrite-clearer")!;
+    await options.getByRole("button", { name: /Rewrite clearer/ }).click();
+    await options.getByLabel("Body").fill("My pending rewrite for {{text}}");
+    const page = await app.context.newPage();
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    await page.locator("#textarea").focus();
+    await openPromptMenu(page, page, app);
+    await insertTemplateFromMenu(page, "Rewrite clearer", { text: "Usage test" });
+    await expect.poll(async () => (await readTemplates(options)).find((item) => item.id === before.id)?.lastUsedAt).toBeTruthy();
+    const used = (await readTemplates(options)).find((item) => item.id === before.id)!;
+    expect(used.updatedAt).toBe(before.updatedAt);
+    await expect(options.getByLabel("Body")).toHaveValue("My pending rewrite for {{text}}");
+    await expect(options.locator(".status.error")).toHaveCount(0);
+    await options.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(options.locator(".status")).toContainText('Saved "Rewrite clearer".');
+    const saved = (await readTemplates(options)).find((item) => item.id === before.id)!;
+    expect(saved.body).toBe("My pending rewrite for {{text}}");
+    expect(saved.lastUsedAt).toBe(used.lastUsedAt);
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("successful insertion closes immediately even if recording usage fails", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-usage-failure"));
+  const worker = app.context.serviceWorkers()[0] ?? await app.context.waitForEvent("serviceworker");
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    const page = await app.context.newPage();
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    page.on("console", (message) => {
+      if (message.type() === "warning" && message.text().includes("Could not record template usage")) {
+        warnings.push(message.text());
+      }
+    });
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    await worker.evaluate(() => {
+      const originalSet = chrome.storage.local.set;
+      (globalThis as typeof globalThis & { __restoreUsageSet?: () => void }).__restoreUsageSet = () => {
+        chrome.storage.local.set = originalSet;
+      };
+      chrome.storage.local.set = (() => Promise.reject(new Error("Test usage failure"))) as typeof chrome.storage.local.set;
+    });
+    const scenarios: Array<{ title: string; values: Record<string, string>; expected: string }> = [
+      { title: "Summarize page", values: {}, expected: "Summarize the key ideas from this page in concise bullets." },
+      { title: "Rewrite clearer", values: { text: "One insertion" }, expected: "Rewrite the following text so it is clearer, shorter, and keeps the original meaning:\n\nOne insertion" },
+    ];
+    for (const scenario of scenarios) {
+      await page.locator("#textarea").fill("");
+      await page.locator("#textarea").focus();
+      await openPromptMenu(page, page, app);
+      await insertTemplateFromMenu(page, scenario.title, scenario.values);
+      await expect(page.locator("#textarea")).toHaveValue(scenario.expected);
+      await expect(page.locator(`#${extensionHostId} .panel`)).toHaveCount(0);
+    }
+    await expect.poll(() => warnings.length).toBe(2);
+    expect(errors).toEqual([]);
+    expect((await readTemplates(options)).every((item) => item.lastUsedAt === undefined)).toBe(true);
+    await worker.evaluate(() => {
+      const scope = globalThis as typeof globalThis & { __restoreUsageSet?: () => void };
+      scope.__restoreUsageSet?.();
+      delete scope.__restoreUsageSet;
+    });
+    await page.locator("#textarea").fill("");
+    await page.locator("#textarea").focus();
+    await openPromptMenu(page, page, app);
+    await insertTemplateFromMenu(page, "Summarize page");
+    await expect.poll(async () => (await readTemplates(options)).find((item) => item.id === "summarize-page")?.lastUsedAt).toBeTruthy();
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("menu refresh preserves search and variable focus and catches load failures", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-menu-refresh"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    const page = await app.context.newPage();
+    const errors: string[] = [];
+    let refreshWarnings = 0;
+    page.on("pageerror", (error) => errors.push(error.message));
+    page.on("console", (message) => {
+      if (message.type() === "warning" && message.text().includes("Could not refresh templates")) {
+        refreshWarnings += 1;
+      }
+    });
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    await page.locator("#textarea").focus();
+    await openPromptMenu(page, page, app);
+    await chooseTemplateFromMenu(page, "Compare options");
+    const menu = page.locator(`#${extensionHostId}`);
+    await menu.getByLabel("option_a", { exact: true }).fill("First draft");
+    await menu.getByLabel("option_b", { exact: true }).fill("Second draft");
+    const active = await menu.getByLabel("option_b", { exact: true }).elementHandle();
+    await options.getByRole("button", { name: /Summarize page/ }).click();
+    await options.getByLabel("Body").fill("Updated summary body");
+    await options.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(options.locator(".status")).toContainText('Saved "Summarize page".');
+    expect(await active!.evaluate((node) => node.isConnected)).toBe(true);
+    await expect(menu.getByLabel("option_a", { exact: true })).toHaveValue("First draft");
+    await expect(menu.getByLabel("option_b", { exact: true })).toHaveValue("Second draft");
+    // Updating Options moved browser focus; explicitly refocus the draft before a background-only refresh.
+    await menu.getByLabel("option_b", { exact: true }).focus();
+    await delayNextContentRead(page, app, "fail");
+    await options.evaluate(() => chrome.runtime.sendMessage({ type: "TEMPLATES_UPDATED" }));
+    await expect.poll(() => refreshWarnings).toBe(1);
+    await expect(menu.getByLabel("option_b", { exact: true })).toBeFocused();
+    expect(await active!.evaluate((node) => node.isConnected)).toBe(true);
+    await clickMenuButton(page, "Back");
+    const search = menu.locator("input.search");
+    await search.fill("Summarize");
+    await expect(menu.getByRole("option")).toContainText("Updated summary body");
+    const searchNode = await search.elementHandle();
+    await options.evaluate(() => chrome.runtime.sendMessage({ type: "TEMPLATES_UPDATED" }));
+    await expect(search).toHaveValue("Summarize");
+    expect(await searchNode!.evaluate((node) => node.isConnected)).toBe(true);
+    expect(errors).toEqual([]);
+    await clickMenuButton(page, "Close");
+    await page.evaluate(() => {
+      const password = document.createElement("input");
+      password.id = "password-target";
+      password.type = "password";
+      document.body.prepend(password);
+      password.focus();
+    });
+    expect(await page.evaluate(detectFocusedInsertTarget)).toEqual({ hasFocusedInsertTarget: false });
+    await openPromptMenu(page, page, app);
+    await expectMenuText(page).toContain("Focus a text field before opening PromptCrate.");
+    await clickMenuButton(page, "Close");
+  } finally {
+    await app.context.close();
+  }
+});
+
 test("Options saves favorites through the form and preserves unsaved edits on failure", async (
   { browserName }, testInfo,
 ) => {
@@ -610,10 +827,11 @@ test("Options saves favorites through the form and preserves unsaved edits on fa
     expect((await saved())!.body).toBe(originalBody);
 
     await options.evaluate(() => {
-      const originalSet = chrome.storage.local.set;
-      chrome.storage.local.set = (() => Promise.reject(new Error("Test save failure"))) as typeof chrome.storage.local.set;
+      const originalSend = chrome.runtime.sendMessage.bind(chrome.runtime);
+      chrome.runtime.sendMessage = ((message: { type?: string }) => message.type === "MUTATE_TEMPLATES"
+        ? Promise.reject(new Error("Test save failure")) : originalSend(message)) as typeof chrome.runtime.sendMessage;
       window.addEventListener("promptcrate:test-restore-save", () => {
-        chrome.storage.local.set = originalSet;
+        chrome.runtime.sendMessage = originalSend;
       }, { once: true });
     });
     await options.getByRole("button", { name: "Save", exact: true }).click();
@@ -943,10 +1161,11 @@ test("a failed import preserves the editor and pending import for retry", async 
     await options.locator('input[type="file"]').setInputFiles(importPath);
     await expect(options.getByRole("button", { name: "Merge" })).toBeVisible();
     await options.evaluate(() => {
-      const originalSet = chrome.storage.local.set;
-      chrome.storage.local.set = (() => Promise.reject(new Error("Test storage failure"))) as typeof chrome.storage.local.set;
+      const originalSend = chrome.runtime.sendMessage.bind(chrome.runtime);
+      chrome.runtime.sendMessage = ((message: { type?: string }) => message.type === "MUTATE_TEMPLATES"
+        ? Promise.reject(new Error("Test storage failure")) : originalSend(message)) as typeof chrome.runtime.sendMessage;
       window.addEventListener("promptcrate:test-restore-storage", () => {
-        chrome.storage.local.set = originalSet;
+        chrome.runtime.sendMessage = originalSend;
       }, { once: true });
     });
 
@@ -1156,28 +1375,34 @@ async function delayNextContentRead(
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: (readMode: "delay" | "fail") => {
-        const originalGet = chrome.storage.local.get.bind(chrome.storage.local);
+        const originalSend = chrome.runtime.sendMessage.bind(chrome.runtime);
         if (readMode === "fail") {
-          chrome.storage.local.get = (() => {
-            chrome.storage.local.get = originalGet;
+          chrome.runtime.sendMessage = ((message: { type?: string }) => {
+            if (message.type !== "READ_TEMPLATES") {
+              return originalSend(message);
+            }
+            chrome.runtime.sendMessage = originalSend;
             return Promise.reject(new Error("Test load failure"));
-          }) as typeof chrome.storage.local.get;
+          }) as typeof chrome.runtime.sendMessage;
           return;
         }
         let first = true;
         let readCount = 0;
         document.documentElement.removeAttribute("data-promptcrate-read-blocked");
         document.documentElement.setAttribute("data-promptcrate-read-count", "0");
-        chrome.storage.local.get = (async (keys: string[]) => {
+        chrome.runtime.sendMessage = (async (message: { type?: string }) => {
+          if (message.type !== "READ_TEMPLATES") {
+            return originalSend(message);
+          }
           readCount += 1;
           document.documentElement.setAttribute("data-promptcrate-read-count", String(readCount));
           const shouldDelay = first;
           first = false;
-          const result = await originalGet(keys);
+          const result = await originalSend(message);
           if (shouldDelay) {
             await new Promise<void>((resolve) => {
               window.addEventListener("promptcrate:test-release-read", () => {
-                chrome.storage.local.get = originalGet;
+                chrome.runtime.sendMessage = originalSend;
                 document.documentElement.removeAttribute("data-promptcrate-read-blocked");
                 resolve();
               }, { once: true });
@@ -1185,7 +1410,7 @@ async function delayNextContentRead(
             });
           }
           return result;
-        }) as typeof chrome.storage.local.get;
+        }) as typeof chrome.runtime.sendMessage;
       },
       args: [readMode],
     });
