@@ -22,6 +22,7 @@ async function setupWorker() {
       onInstalled: { addListener: (callback: () => void) => { installed = callback; } },
     },
     commands: { onCommand: { addListener: vi.fn() } },
+    action: { onClicked: { addListener: vi.fn() } },
     storage: { local: { get: vi.fn(async () => structuredClone(data)), set } },
     tabs: { query, sendMessage: vi.fn().mockResolvedValue(undefined) },
   });

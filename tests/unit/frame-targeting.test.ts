@@ -10,6 +10,19 @@ afterEach(() => {
 });
 
 describe("prompt menu frame targeting", () => {
+  it("keeps the frame of a focused closed menu eligible for repeated activation", () => {
+    const host = document.createElement("div");
+    host.id = "promptcrate-menu-host";
+    host.style.display = "block";
+    const search = document.createElement("input");
+    host.attachShadow({ mode: "closed" }).append(search);
+    document.body.append(host);
+    search.focus();
+    expect(document.activeElement).toBe(host);
+    expect(host.shadowRoot).toBeNull();
+    expect(detectFocusedInsertTarget()).toEqual({ hasFocusedInsertTarget: true });
+  });
+
   it.each(["", "TRUE", "plaintext-only"])("uses computed editability for contenteditable=%s", (attribute) => {
     const target = document.createElement("div");
     target.setAttribute("contenteditable", attribute);

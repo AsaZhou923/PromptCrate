@@ -53,7 +53,15 @@ chrome.commands.onCommand.addListener((command) => {
     return;
   }
 
-  void openPromptMenuForActiveTab();
+  void openPromptMenuForActiveTab().catch(reportActivationError);
+});
+
+chrome.action.onClicked.addListener((tab) => {
+  if (typeof tab.id !== "number") {
+    console.warn("[prompt-crate] Clicked tab has no usable tab ID");
+    return;
+  }
+  void openPromptMenuForTab(tab.id).catch(reportActivationError);
 });
 
 async function openPromptMenuForActiveTab(): Promise<void> {
@@ -63,6 +71,10 @@ async function openPromptMenuForActiveTab(): Promise<void> {
     return;
   }
 
+  await openPromptMenuForTab(tabId);
+}
+
+async function openPromptMenuForTab(tabId: number): Promise<void> {
   const didInject = await injectContentScript(tabId);
   if (!didInject) {
     return;
@@ -70,6 +82,10 @@ async function openPromptMenuForActiveTab(): Promise<void> {
 
   const frameIds = await getPromptMenuFrameIds(tabId);
   await sendOpenPromptMenu(tabId, frameIds);
+}
+
+function reportActivationError(error: unknown): void {
+  console.warn("[prompt-crate] Could not open prompt menu", getErrorMessage(error));
 }
 
 async function getActiveTabId(): Promise<number | null> {
