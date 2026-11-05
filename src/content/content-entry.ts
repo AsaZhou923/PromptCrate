@@ -39,9 +39,10 @@ type MenuState = {
 if (!window.__promptCrateContentEntryLoaded) {
   window.__promptCrateContentEntryLoaded = true;
 
+  let menuHost: { host: HTMLDivElement; shadow: ShadowRoot } | null = null;
   const selectionTracker = createSelectionTracker(
     document,
-    (element) => element === document.getElementById(HOST_ID),
+    (element) => element === menuHost?.host,
   );
   let state: MenuState | null = null;
 
@@ -61,45 +62,6 @@ if (!window.__promptCrateContentEntryLoaded) {
       void reloadTemplates();
     }
   });
-
-  window.addEventListener("promptcrate:open-menu", (event) => {
-    focusRequestedTarget(event);
-    void openPromptMenu();
-  });
-
-  function focusRequestedTarget(event: Event): void {
-    const selector = (
-      event as Event & { detail?: { focusSelector?: unknown } | null }
-    ).detail?.focusSelector;
-
-    if (typeof selector !== "string") {
-      return;
-    }
-
-    const target = document.querySelector(selector);
-
-    if (!(target instanceof HTMLElement)) {
-      return;
-    }
-
-    target.focus();
-
-    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
-      if (target.selectionStart !== null && target.selectionEnd !== null) {
-        target.setSelectionRange(target.value.length, target.value.length);
-      }
-      return;
-    }
-
-    if (target.isContentEditable) {
-      const range = document.createRange();
-      range.selectNodeContents(target);
-      range.collapse(false);
-      const selection = document.getSelection();
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-    }
-  }
 
   async function openPromptMenu(): Promise<void> {
     // Repeated commands keep the original target, query, and unfinished variable values.
@@ -173,12 +135,12 @@ if (!window.__promptCrateContentEntryLoaded) {
   }
 
   function ensureMenuHost(): { host: HTMLDivElement; shadow: ShadowRoot } {
-    const existing = document.getElementById(HOST_ID);
-
-    if (existing instanceof HTMLDivElement && existing.shadowRoot) {
-      return { host: existing, shadow: existing.shadowRoot };
+    if (menuHost) {
+      return menuHost;
     }
 
+    // Never adopt a page-created host or an old script instance's root.
+    document.getElementById(HOST_ID)?.remove();
     const host = document.createElement("div");
     host.id = HOST_ID;
     host.style.position = "fixed";
@@ -188,7 +150,18 @@ if (!window.__promptCrateContentEntryLoaded) {
     host.style.top = "72px";
     host.style.left = "50%";
     host.style.transform = "translateX(-50%)";
-    const shadow = host.attachShadow({ mode: "open" });
+    const shadow = host.attachShadow({ mode: "closed" });
+    // Gate control actions: Chromium can emit an untrusted compositionend for a native IME commit.
+    for (const type of [
+      "click", "mousedown", "keydown", "keyup", "keypress", "submit",
+    ]) {
+      shadow.addEventListener(type, (event) => {
+        if (!event.isTrusted) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      }, true);
+    }
     // Let menu controls handle their events before they reach the host page.
     for (const type of [
       "keydown", "keyup", "keypress", "beforeinput", "input",
@@ -205,10 +178,18 @@ if (!window.__promptCrateContentEntryLoaded) {
     }
     document.documentElement.appendChild(host);
 
-    return { host, shadow };
+    menuHost = { host, shadow };
+    return menuHost;
   }
 
   function positionHost(host: HTMLDivElement): void {
+    if (!host.isConnected) {
+      const existing = document.getElementById(HOST_ID);
+      if (existing !== host) {
+        existing?.remove();
+      }
+      document.documentElement.appendChild(host);
+    }
     host.style.display = "block";
   }
 

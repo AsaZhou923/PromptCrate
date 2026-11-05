@@ -37,6 +37,11 @@ export function detectFocusedInsertTarget(): FocusedInsertProbe {
       return false;
     }
 
+    // A focused closed menu exposes only its host; keep repeated activation in that frame.
+    if (element instanceof HTMLElement && element.id === "promptcrate-menu-host" && element.style.display !== "none") {
+      return true;
+    }
+
     if (element instanceof HTMLTextAreaElement) {
       return !element.readOnly && !element.matches(":disabled");
     }

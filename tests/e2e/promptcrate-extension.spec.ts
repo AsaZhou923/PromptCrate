@@ -1,5 +1,6 @@
 import {
   chromium,
+  selectors,
   expect,
   test,
   type BrowserContext,
@@ -46,9 +47,18 @@ let staticServer: { server: Server; baseURL: string };
 let shortcutOpensMenu: boolean | null = process.env.PROMPTCRATE_E2E_USE_SHORTCUT === "1"
   ? null
   : false;
-let lastOpenPromptDiagnostics = "";
 
 test.beforeAll(async () => {
+  await selectors.register("promptMenu", () => {
+    const getRoot = (root: Node) => {
+      const document = (root.nodeType === Node.DOCUMENT_NODE ? root : root.ownerDocument) as Document;
+      return document.getElementById("promptcrate-menu-host")?.shadowRoot;
+    };
+    return {
+      query: (root: Node, selector: string) => getRoot(root)?.querySelector(selector) ?? null,
+      queryAll: (root: Node, selector: string) => [...(getRoot(root)?.querySelectorAll(selector) ?? [])],
+    };
+  }, { contentScript: false });
   staticServer = await startStaticServer(repoRoot);
 });
 
@@ -63,6 +73,129 @@ test.afterAll(async () => {
       resolve();
     });
   });
+});
+
+test("page scripts cannot read, reopen, or synthetically operate the private menu", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-private-menu"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    await options.getByRole("button", { name: "New", exact: true }).click();
+    await options.getByLabel("Title").fill("Private trigger");
+    await options.getByLabel("Body").fill("PRIVATE TEMPLATE: {{value}}");
+    await options.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(options.locator(".status")).toContainText('Saved "Private trigger".');
+    const page = await app.context.newPage();
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    await page.evaluate(() => {
+      const scope = window as Window & { __capturedMenuRoots?: ShadowRoot[] };
+      scope.__capturedMenuRoots = [];
+      const originalAttach = Element.prototype.attachShadow;
+      Element.prototype.attachShadow = function(this: Element, init: ShadowRootInit) {
+        const root = originalAttach.call(this, init);
+        if (this.id === "promptcrate-menu-host") scope.__capturedMenuRoots!.push(root);
+        return root;
+      };
+      const fake = document.createElement("div");
+      fake.id = "promptcrate-menu-host";
+      fake.style.display = "none";
+      fake.attachShadow({ mode: "open" }).textContent = "Page-owned impostor";
+      document.documentElement.append(fake);
+      document.querySelector<HTMLTextAreaElement>("#textarea")!.focus();
+    });
+    const worker = app.context.serviceWorkers()[0] ?? await app.context.waitForEvent("serviceworker");
+    expect(await worker.evaluate(() => chrome.action.onClicked.hasListeners())).toBe(true);
+    await worker.evaluate(async (url) => {
+      const tab = (await chrome.tabs.query({})).find((item) => item.url === url);
+      await chrome.scripting.executeScript({ target: { tabId: tab!.id! }, files: ["content-entry.js"] });
+    }, page.url());
+    // No debugger bridge is installed in this test. All page-side privacy assertions use native DOM access.
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent("promptcrate:open-menu", {
+      detail: { focusSelector: "#text-input" },
+    })));
+    expect(await page.evaluate(() => ({
+      display: document.getElementById("promptcrate-menu-host")!.style.display,
+      text: document.getElementById("promptcrate-menu-host")!.shadowRoot?.textContent,
+      focused: document.activeElement?.id,
+    }))).toEqual({ display: "none", text: "Page-owned impostor", focused: "textarea" });
+
+    await sendMenuOpen(page, page, app);
+    await page.waitForFunction(() => document.getElementById("promptcrate-menu-host")?.style.display === "block");
+    await expect.poll(() => page.evaluate(() => {
+      const host = document.getElementById("promptcrate-menu-host")!;
+      const roots = (window as Window & { __capturedMenuRoots?: ShadowRoot[] }).__capturedMenuRoots!;
+      return {
+        root: host.shadowRoot,
+        privateInPage: document.documentElement.textContent?.includes("PRIVATE TEMPLATE"),
+        visibleBodies: document.querySelectorAll(".template-body").length,
+        captured: roots.length,
+        impostorConnected: roots[0].host.isConnected,
+      };
+    })).toEqual({ root: null, privateInPage: false, visibleBodies: 0, captured: 1, impostorConnected: false });
+    const session = await menuDebugger(page);
+    let root = (await inspectMenuRoots(page))[0];
+    const inspect = async (fn: string) => (await session.send("Runtime.callFunctionOn", {
+      objectId: root.objectId, functionDeclaration: fn, returnByValue: true,
+    })).result.value;
+    await expect.poll(() => inspect('function() { return !!this.querySelector(".search"); }')).toBe(true);
+    expect(await inspect(`function() {
+      this.querySelector(".template-item").click();
+      this.querySelector(".search").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, composed: true }));
+      this.querySelector('[aria-label="Close"]').click();
+      return { display: this.host.style.display, form: !!this.querySelector(".variable-form") };
+    }`)).toEqual({ display: "block", form: false });
+    await expect(page.locator("#textarea")).toHaveValue("");
+    // Removing the owned host and forging its ID must not cause adoption of the page's open root.
+    await page.evaluate(() => {
+      document.getElementById("promptcrate-menu-host")!.remove();
+      const fake = document.createElement("div");
+      fake.id = "promptcrate-menu-host";
+      fake.attachShadow({ mode: "open" }).textContent = "Second impostor";
+      document.documentElement.append(fake);
+    });
+    await sendMenuOpen(page, page, app);
+    await page.waitForFunction(() => document.getElementById("promptcrate-menu-host")?.style.display === "block");
+    expect(await page.evaluate(() => document.getElementById("promptcrate-menu-host")!.shadowRoot)).toBeNull();
+    root = (await inspectMenuRoots(page))[0];
+    const search = await session.send("DOM.querySelector", { nodeId: root.nodeId, selector: "input.search" });
+    await session.send("DOM.focus", { nodeId: search.nodeId });
+    await page.keyboard.insertText("Private trigger");
+    await expect.poll(() => inspect('function() { return this.querySelectorAll(".template-item").length; }')).toBe(1);
+    await page.keyboard.press("Enter");
+    await expect.poll(() => inspect('function() { return !!this.querySelector(".variable-form"); }')).toBe(true);
+    const variable = await session.send("DOM.querySelector", { nodeId: root.nodeId, selector: "textarea" });
+    await session.send("DOM.focus", { nodeId: variable.nodeId });
+    await page.keyboard.insertText("User-approved value");
+    expect(await inspect(`function() {
+      this.querySelector("form").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      return this.host.style.display;
+    }`)).toBe("block");
+    await expect(page.locator("#textarea")).toHaveValue("");
+    expect(await page.evaluate(() => document.getElementById("promptcrate-menu-host")!.shadowRoot)).toBeNull();
+    await page.keyboard.press("Control+Enter");
+    await waitForMenuClosed(page);
+    await expect(page.locator("#textarea")).toHaveValue("PRIVATE TEMPLATE: User-approved value");
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent("promptcrate:open-menu", {
+      detail: { focusSelector: "#text-input" },
+    })));
+    expect(await page.evaluate(() => ({
+      display: document.getElementById("promptcrate-menu-host")!.style.display,
+      focused: document.activeElement?.id,
+      root: document.getElementById("promptcrate-menu-host")!.shadowRoot,
+    }))).toEqual({ display: "none", focused: "textarea", root: null });
+    await expect.poll(async () => (await readTemplates(options)).filter((item) => item.lastUsedAt).length).toBe(1);
+    const iframe = await getFixtureIframe(page);
+    await iframe.locator("#iframe-textarea").focus();
+    await sendMenuOpen(page, iframe, app);
+    await iframe.waitForFunction(() => document.getElementById("promptcrate-menu-host")?.style.display === "block");
+    await iframe.waitForFunction(() => document.activeElement?.id === "promptcrate-menu-host");
+    await expect.poll(() => iframe.evaluate(detectFocusedInsertTarget)).toEqual({ hasFocusedInsertTarget: true });
+    expect(await iframe.evaluate(() => document.getElementById("promptcrate-menu-host")!.shadowRoot)).toBeNull();
+    await page.keyboard.press("Escape");
+    await waitForMenuClosed(iframe);
+  } finally {
+    await app.context.close();
+  }
 });
 
 test("inserts templates into fixture textarea, input, contenteditable, Shadow DOM, and iframe targets", async (
@@ -727,7 +860,7 @@ test("successful insertion closes immediately even if recording usage fails", as
       await openPromptMenu(page, page, app);
       await insertTemplateFromMenu(page, scenario.title, scenario.values);
       await expect(page.locator("#textarea")).toHaveValue(scenario.expected);
-      await expect(page.locator(`#${extensionHostId} .panel`)).toHaveCount(0);
+      await expect(menuPanel(page)).toHaveCount(0);
     }
     await expect.poll(() => warnings.length).toBe(2);
     expect(errors).toEqual([]);
@@ -765,7 +898,7 @@ test("menu refresh preserves search and variable focus and catches load failures
     await page.locator("#textarea").focus();
     await openPromptMenu(page, page, app);
     await chooseTemplateFromMenu(page, "Compare options");
-    const menu = page.locator(`#${extensionHostId}`);
+    const menu = menuPanel(page);
     await menu.getByLabel("option_a", { exact: true }).fill("First draft");
     await menu.getByLabel("option_b", { exact: true }).fill("Second draft");
     const active = await menu.getByLabel("option_b", { exact: true }).elementHandle();
@@ -1213,7 +1346,7 @@ test("repeated opens preserve page selections, search, variable drafts, and Back
       await fillMenuSearch(page, "Summarize");
       await repeatOpenViaRuntime(page, app, "OPEN_PROMPT_MENU");
       await repeatOpenViaRuntime(page, app, "REOPEN_MENU");
-      await expect(page.locator("#" + extensionHostId + " input.search")).toHaveValue("Summarize");
+      await expect(menuPanel(page).locator("input.search")).toHaveValue("Summarize");
       await insertTemplateFromMenu(page, "Summarize page");
       await expect(target).toHaveValue("Before " + summary + " after");
     }
@@ -1227,10 +1360,10 @@ test("repeated opens preserve page selections, search, variable drafts, and Back
     });
     await openPromptMenu(page, page, app);
     await chooseTemplateFromMenu(page, "Rewrite clearer");
-    const variable = page.locator("#" + extensionHostId + " .variable-form textarea");
+    const variable = menuPanel(page).locator(".variable-form textarea");
     await variable.fill("Preserved variable");
     await repeatOpenViaRuntime(page, app, "REOPEN_MENU");
-    await page.evaluate(() => window.dispatchEvent(new Event("promptcrate:open-menu")));
+    await repeatOpenViaRuntime(page, app, "OPEN_PROMPT_MENU");
     await expect(variable).toHaveValue("Preserved variable");
     await clickMenuButton(page, "Insert");
     await waitForMenuClosed(page);
@@ -1281,7 +1414,7 @@ async function repeatOpenViaRuntime(
     if (typeof tab?.id !== "number") {
       throw new Error("Fixture tab not found.");
     }
-    await chrome.tabs.sendMessage(tab.id, { type });
+    await chrome.tabs.sendMessage(tab.id, { type }, { frameId: 0 });
   }, { url: page.url(), type: messageType });
 }
 
@@ -1304,10 +1437,8 @@ test("coalesces opens during loading and ignores a closed menu's delayed read", 
       input.setSelectionRange(7, 14);
     });
     await delayNextContentRead(page, app);
-    await page.evaluate(() => {
-      window.dispatchEvent(new Event("promptcrate:open-menu"));
-      window.dispatchEvent(new Event("promptcrate:open-menu"));
-    });
+    await repeatOpenViaRuntime(page, app, "OPEN_PROMPT_MENU");
+    await repeatOpenViaRuntime(page, app, "OPEN_PROMPT_MENU");
     await expect(page.locator("html")).toHaveAttribute("data-promptcrate-read-blocked", "true");
     await expect(page.locator("html")).toHaveAttribute("data-promptcrate-read-count", "1");
     await page.evaluate(() => window.dispatchEvent(new Event("promptcrate:test-release-read")));
@@ -1317,7 +1448,7 @@ test("coalesces opens during loading and ignores a closed menu's delayed read", 
 
     await target.focus();
     await delayNextContentRead(page, app);
-    await page.evaluate(() => window.dispatchEvent(new Event("promptcrate:open-menu")));
+    await repeatOpenViaRuntime(page, app, "OPEN_PROMPT_MENU");
     await expect(page.locator("html")).toHaveAttribute("data-promptcrate-read-blocked", "true");
     await page.evaluate(() => {
       document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
@@ -1342,7 +1473,7 @@ test("coalesces opens during loading and ignores a closed menu's delayed read", 
 
     await target.focus();
     await delayNextContentRead(page, app, "fail");
-    await page.evaluate(() => window.dispatchEvent(new Event("promptcrate:open-menu")));
+    await repeatOpenViaRuntime(page, app, "OPEN_PROMPT_MENU");
     await expectMenuText(page).toContain("Could not load templates. Close PromptCrate and try again.");
     await expectMenuText(page).toContain("Test load failure");
     await repeatOpenViaRuntime(page, app, "REOPEN_MENU");
@@ -1352,7 +1483,7 @@ test("coalesces opens during loading and ignores a closed menu's delayed read", 
     await expect(target).toBeFocused();
     await openPromptMenu(page, page, app);
     await expectMenuText(page).toContain("Newest template");
-    await expect(page.locator("#" + extensionHostId + " .notice.error")).toHaveCount(0);
+    await expect(menuPanel(page).locator(".notice.error")).toHaveCount(0);
     await clickMenuButton(page, "Close");
     await waitForMenuClosed(page);
   } finally {
@@ -1488,7 +1619,7 @@ test("menu keyboard and editing events stay inside the menu", async ({ browserNa
       }
     });
 
-    const menu = page.locator(`#${extensionHostId}`);
+    const menu = menuPanel(page);
     await menu.locator("input.search").pressSequentially("Rewrite");
     await expect(menu.getByRole("option")).toHaveCount(1);
     await page.keyboard.press("Enter");
@@ -1528,7 +1659,7 @@ test("IME composition preserves the search field and ignores candidate confirmat
     await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
     await page.locator("#textarea").focus();
     await openPromptMenu(page, page, app);
-    const menu = page.locator(`#${extensionHostId}`);
+    const menu = menuPanel(page);
     const search = menu.locator("input.search");
     const originalSearch = await search.elementHandle();
     const cdp = await app.context.newCDPSession(page);
@@ -1579,7 +1710,7 @@ test("keyboard navigation keeps selected results visible without rebuilding or l
     await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
     await page.locator("#textarea").focus();
     await openPromptMenu(page, page, app);
-    const menu = page.locator(`#${extensionHostId}`);
+    const menu = menuPanel(page);
     const search = menu.locator("input.search");
     const list = menu.getByRole("listbox");
     const originalList = await list.elementHandle();
@@ -1627,7 +1758,7 @@ test("multiline variables preserve pasted text and Enter, with modifier-Enter su
     const page = await app.context.newPage();
     await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
     const target = page.locator("#textarea");
-    const menu = page.locator(`#${extensionHostId}`);
+    const menu = menuPanel(page);
     const stack = "TypeError: x\n    at foo (a.js:1)\n    at bar (b.js:2)";
     const prefix = "Given this error and context, identify likely root causes and the next three checks:\n\n";
 
@@ -1695,7 +1826,7 @@ test("literal-only escaped braces save through Options and render without a vari
     await page.locator("#textarea").focus();
     await openPromptMenu(page, page, app);
     await chooseTemplateFromMenu(page, "Literal braces");
-    await expect(page.locator(`#${extensionHostId} .variable-form`)).toHaveCount(0);
+    await expect(menuPanel(page).locator(".variable-form")).toHaveCount(0);
     await waitForMenuClosed(page);
     await expect(page.locator("#textarea")).toHaveValue(expected);
   } finally {
@@ -1719,7 +1850,7 @@ test("duplicate variable requirements and optional preview match the inserted te
     await page.locator("#textarea").focus();
     await openPromptMenu(page, page, app);
     await chooseTemplateFromMenu(page, "Mixed variables");
-    const menu = page.locator(`#${extensionHostId}`);
+    const menu = menuPanel(page);
     const required = menu.getByLabel("x", { exact: true });
     const optional = menu.getByLabel("note (optional)", { exact: true });
     await expect(menu.locator(".field")).toHaveCount(3);
@@ -1899,240 +2030,142 @@ async function openPromptMenu(
   await openPromptMenuViaExtensionApi(triggerPage, menuScope, app);
 }
 
+function menuPanel(scope: BrowserScope): Locator {
+  return scope.locator("promptMenu=.panel");
+}
+
+const menuDebuggerSessions = new WeakMap<Page, import("@playwright/test").CDPSession>();
+
+async function menuDebugger(scope: BrowserScope) {
+  const page = "context" in scope ? scope : scope.page();
+  let session = menuDebuggerSessions.get(page);
+  if (!session) {
+    session = await page.context().newCDPSession(page);
+    menuDebuggerSessions.set(page, session);
+  }
+  return session;
+}
+
+type InspectorNode = {
+  nodeId: number;
+  attributes?: string[];
+  children?: InspectorNode[];
+  shadowRoots?: InspectorNode[];
+  contentDocument?: InspectorNode;
+};
+
+async function inspectMenuRoots(scope: BrowserScope): Promise<Array<{ nodeId: number; objectId: string }>> {
+  const session = await menuDebugger(scope);
+  const document = await session.send("DOM.getDocument", { depth: -1, pierce: true });
+  const roots: InspectorNode[] = [];
+  const visit = (node: InspectorNode) => {
+    const attributes = node.attributes ?? [];
+    const idIndex = attributes.indexOf("id");
+    if (idIndex >= 0 && attributes[idIndex + 1] === extensionHostId) {
+      roots.push(...(node.shadowRoots ?? []));
+    }
+    for (const child of node.children ?? []) visit(child);
+    if (node.contentDocument) visit(node.contentDocument);
+  };
+  visit(document.root);
+  const resolved: Array<{ nodeId: number; objectId: string }> = [];
+  for (const root of roots) {
+    const { object } = await session.send("DOM.resolveNode", { nodeId: root.nodeId });
+    if (object.objectId) resolved.push({ nodeId: root.nodeId, objectId: object.objectId });
+  }
+  return resolved;
+}
+
+async function enableMenuInspection(scope: BrowserScope): Promise<void> {
+  const alreadyInspected = await scope.evaluate((id) => {
+    const host = document.getElementById(id);
+    return host && Object.prototype.hasOwnProperty.call(host, "shadowRoot") && host.shadowRoot?.mode === "closed";
+  }, extensionHostId);
+  if (alreadyInspected) return;
+  const session = await menuDebugger(scope);
+  for (const root of await inspectMenuRoots(scope)) {
+    // Test-only debugger bridge. The shipped bundle is unchanged, and privacy tests skip this bridge.
+    const result = await session.send("Runtime.callFunctionOn", {
+      objectId: root.objectId,
+      functionDeclaration: `function() {
+        const root = this;
+        if (root.mode !== "closed") throw new Error("Expected the production closed menu root");
+        Object.defineProperty(root.host, "shadowRoot", { configurable: true, get: function() { return root; } });
+        return root.mode;
+      }`,
+      returnByValue: true,
+    });
+    if (result.exceptionDetails) throw new Error("Could not inspect the production closed menu root.");
+  }
+}
+
+async function sendMenuOpen(
+  triggerPage: Page,
+  menuScope: BrowserScope,
+  app: { context: BrowserContext },
+  type: "OPEN_PROMPT_MENU" | "REOPEN_MENU" = "OPEN_PROMPT_MENU",
+): Promise<void> {
+  const worker = app.context.serviceWorkers()[0] ?? await app.context.waitForEvent("serviceworker");
+  await worker.evaluate(async ({ url, frameUrl, type }) => {
+    const tab = (await chrome.tabs.query({})).find((item) => item.url === url);
+    if (typeof tab?.id !== "number") throw new Error("Fixture tab not found.");
+    await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ["content-entry.js"] });
+    let frameId = 0;
+    if (frameUrl !== null) {
+      const frames = await chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: true },
+        func: () => ({ url: location.href, child: window !== window.top }),
+      });
+      const frame = frames.find((item) => item.result?.url === frameUrl && item.result?.child);
+      if (typeof frame?.frameId !== "number") throw new Error("Fixture iframe not found.");
+      frameId = frame.frameId;
+    }
+    await chrome.tabs.sendMessage(tab.id, { type }, { frameId });
+  }, { url: triggerPage.url(), frameUrl: menuScope === triggerPage ? null : menuScope.url(), type });
+}
+
 async function openPromptMenuViaExtensionApi(
   triggerPage: Page,
   menuScope: BrowserScope,
   app: { context: BrowserContext; extensionId: string },
 ): Promise<void> {
   await triggerPage.bringToFront();
-  const worker = app.context.serviceWorkers()[0] ?? await app.context.waitForEvent("serviceworker");
-
-  const diagnostics = await worker.evaluate(async (targetUrl) => {
-      const tabs = await chrome.tabs.query({});
-      const targetTab = tabs.find((tab) => tab.url === targetUrl) ??
-        tabs.find((tab) => tab.active);
-
-      if (typeof targetTab?.id !== "number") {
-        throw new Error(`Target tab not found for ${targetUrl}`);
-      }
-
-      await chrome.scripting.executeScript({
-        target: { tabId: targetTab.id, allFrames: true },
-        files: ["content-entry.js"],
-      });
-
-      return {
-        chosenUrl: targetTab.url ?? "",
-        injectedOnly: true,
-        targetUrl,
-        tabs: tabs.map((tab) => ({
-          active: Boolean(tab.active),
-          id: tab.id,
-          title: tab.title ?? "",
-          url: tab.url ?? "",
-        })),
-      };
-    }, triggerPage.url());
-
-  if (menuScope === triggerPage) {
-    const markedTarget = triggerPage.locator(
-      '[data-promptcrate-e2e-focus-target="true"]',
-    );
-
-    if (await markedTarget.count()) {
-      await markedTarget.click({ force: true });
+  await menuScope.evaluate(() => {
+    const target = document.querySelector<HTMLElement>('[data-promptcrate-e2e-focus-target="true"]');
+    if (!target) return;
+    target.focus();
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+      if (target.selectionStart !== null) target.setSelectionRange(target.value.length, target.value.length);
+    } else if (target.isContentEditable) {
+      const range = document.createRange();
+      range.selectNodeContents(target);
+      range.collapse(false);
+      document.getSelection()?.removeAllRanges();
+      document.getSelection()?.addRange(range);
     }
-
-    await triggerPage.evaluate(() => {
-      const markedTarget = document.querySelector<HTMLElement>(
-        '[data-promptcrate-e2e-focus-target="true"]',
-      );
-
-      if (markedTarget) {
-        markedTarget.focus();
-
-        if (
-          markedTarget instanceof HTMLInputElement ||
-          markedTarget instanceof HTMLTextAreaElement
-        ) {
-          markedTarget.setSelectionRange(
-            markedTarget.value.length,
-            markedTarget.value.length,
-          );
-        }
-      }
-
-      window.dispatchEvent(
-        new CustomEvent("promptcrate:open-menu", {
-          detail: {
-            focusSelector: '[data-promptcrate-e2e-focus-target="true"]',
-          },
-        }),
-      );
-    });
-    lastOpenPromptDiagnostics = JSON.stringify(diagnostics, null, 2);
-    await waitForMenu(menuScope);
-    return;
-  }
-
-  const frameDiagnostics = await worker.evaluate(async (targetUrl) => {
-      const tabs = await chrome.tabs.query({});
-      const targetTab = tabs.find((tab) => tab.url === targetUrl) ??
-        tabs.find((tab) => tab.active);
-
-      if (typeof targetTab?.id !== "number") {
-        throw new Error(`Target tab not found for ${targetUrl}`);
-      }
-
-      const results = await chrome.scripting.executeScript({
-        target: { tabId: targetTab.id, allFrames: true },
-        func: () => {
-          const textInputTypes = new Set([
-            "",
-            "text",
-            "search",
-            "email",
-            "url",
-            "tel",
-            "password",
-          ]);
-          const target = findPromptCrateTarget();
-          const hasFocusedInsertTarget = Boolean(target);
-
-          if (target) {
-            focusTarget(target);
-            window.dispatchEvent(
-              new CustomEvent("promptcrate:open-menu", {
-                detail: {
-                  focusSelector: '[data-promptcrate-e2e-focus-target="true"]',
-                },
-              }),
-            );
-          }
-
-          return {
-            activeTag: document.activeElement?.tagName ?? "",
-            didOpen: Boolean(target),
-            hasFocusedInsertTarget,
-            markerCount: document.querySelectorAll(
-              '[data-promptcrate-e2e-focus-target="true"]',
-            ).length,
-          };
-
-          function findPromptCrateTarget(): HTMLElement | null {
-            const markedTarget = document.querySelector<HTMLElement>(
-              '[data-promptcrate-e2e-focus-target="true"]',
-            );
-
-            if (markedTarget) {
-              return markedTarget;
-            }
-
-            let activeElement = document.activeElement;
-
-            while (activeElement?.shadowRoot?.activeElement) {
-              activeElement = activeElement.shadowRoot.activeElement;
-            }
-
-            if (isInsertTarget(activeElement) && activeElement instanceof HTMLElement) {
-              return activeElement;
-            }
-
-            return null;
-          }
-
-          function focusTarget(target: HTMLElement): void {
-            target.focus();
-
-            if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
-              target.setSelectionRange(target.value.length, target.value.length);
-              return;
-            }
-
-            if (target.isContentEditable) {
-              const range = document.createRange();
-              range.selectNodeContents(target);
-              range.collapse(false);
-              const selection = document.getSelection();
-              selection?.removeAllRanges();
-              selection?.addRange(range);
-            }
-          }
-
-          function isInsertTarget(element: Element | null): boolean {
-            return Boolean(
-              element instanceof HTMLTextAreaElement ||
-                (element instanceof HTMLInputElement &&
-                  textInputTypes.has(element.type.toLocaleLowerCase())) ||
-                element?.closest(
-                  '[contenteditable="true"], [contenteditable="plaintext-only"]',
-                ),
-            );
-          }
-        },
-      });
-      const openedFrameIds = results
-        .filter((result) => result.result?.didOpen === true)
-        .map((result) => result.frameId)
-        .filter((frameId): frameId is number => typeof frameId === "number");
-
-      if (openedFrameIds.length === 0) {
-        await chrome.scripting.executeScript({
-          target: { tabId: targetTab.id, frameIds: [0] },
-          func: () => {
-            window.dispatchEvent(new Event("promptcrate:open-menu"));
-          },
-        });
-      }
-
-      return {
-        chosenUrl: targetTab.url ?? "",
-        frameIds: openedFrameIds.length > 0 ? openedFrameIds : [0],
-        frameProbe: results.map((result) => ({
-          frameId: result.frameId,
-          result: result.result,
-        })),
-        targetUrl,
-        tabs: tabs.map((tab) => ({
-          active: Boolean(tab.active),
-          id: tab.id,
-          title: tab.title ?? "",
-          url: tab.url ?? "",
-        })),
-      };
-    }, triggerPage.url());
-  lastOpenPromptDiagnostics = JSON.stringify(frameDiagnostics, null, 2);
+  });
+  await sendMenuOpen(triggerPage, menuScope, app);
   await waitForMenu(menuScope);
 }
 
 async function waitForMenu(scope: BrowserScope, timeout = 7_000): Promise<void> {
-  await scope.waitForFunction(
-    (hostId) => {
-      const host = document.getElementById(hostId) as HTMLDivElement | null;
-      return Boolean(
-        host &&
-          host.style.display !== "none" &&
-          host.shadowRoot?.querySelector(".panel"),
-      );
-    },
-    extensionHostId,
-    { timeout },
-  );
+  await scope.waitForFunction((id) => {
+    const host = document.getElementById(id);
+    return host && host.style.display !== "none";
+  }, extensionHostId, { timeout });
+  await enableMenuInspection(scope);
+  await menuPanel(scope).waitFor({ state: "visible", timeout });
 }
 
 async function waitForMenuClosed(scope: BrowserScope): Promise<void> {
-  await scope.waitForFunction((hostId) => {
-    const host = document.getElementById(hostId) as HTMLDivElement | null;
-    return !host || host.style.display === "none" || !host.shadowRoot?.querySelector(".panel");
+  await scope.waitForFunction((id) => {
+    const host = document.getElementById(id);
+    return !host || host.style.display === "none";
   }, extensionHostId);
 }
 
 function expectMenuText(scope: BrowserScope) {
-  return expect.poll(() =>
-    scope.evaluate((hostId) => {
-      return document.getElementById(hostId)?.shadowRoot?.textContent ?? "";
-    }, extensionHostId),
-  );
+  return expect.poll(async () => (await menuPanel(scope).textContent({ timeout: 500 }).catch(() => "")) ?? "");
 }
 
 async function insertTemplateFromMenu(
@@ -2141,103 +2174,29 @@ async function insertTemplateFromMenu(
   values: Record<string, string> = {},
 ): Promise<void> {
   await chooseTemplateFromMenu(scope, title);
-
   if (Object.keys(values).length === 0) {
     await waitForMenuClosed(scope);
     return;
   }
-
-  await scope.waitForFunction((hostId) => {
-    return Boolean(document.getElementById(hostId)?.shadowRoot?.querySelector(".variable-form"));
-  }, extensionHostId);
-
   for (const [name, value] of Object.entries(values)) {
-    await scope.evaluate(
-      ({ hostId, variableName, variableValue }) => {
-        const shadow = document.getElementById(hostId)?.shadowRoot;
-        const labels = [...(shadow?.querySelectorAll<HTMLElement>(".field") ?? [])];
-        const label = labels.find((candidate) =>
-          candidate.querySelector("span")?.textContent?.startsWith(variableName),
-        );
-        const input = label?.querySelector<HTMLTextAreaElement>("textarea");
-
-        if (!input) {
-          throw new Error(`Variable input not found: ${variableName}`);
-        }
-
-        input.value = variableValue;
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-      },
-      { hostId: extensionHostId, variableName: name, variableValue: value },
-    );
+    const panel = menuPanel(scope);
+    await panel.getByLabel(name, { exact: true }).or(panel.getByLabel(`${name} (optional)`, { exact: true })).fill(value);
   }
-
   await clickMenuButton(scope, "Insert");
   await waitForMenuClosed(scope);
 }
 
 async function chooseTemplateFromMenu(scope: BrowserScope, title: string): Promise<void> {
   await fillMenuSearch(scope, title);
-  await scope.evaluate(
-    ({ hostId, templateTitle }) => {
-      const shadow = document.getElementById(hostId)?.shadowRoot;
-      const item = [...(shadow?.querySelectorAll<HTMLElement>(".template-item") ?? [])]
-        .find((candidate) =>
-          candidate.querySelector(".template-title")?.textContent?.includes(templateTitle),
-        );
-
-      if (!item) {
-        throw new Error(`Template not found: ${templateTitle}`);
-      }
-
-      item.click();
-    },
-    { hostId: extensionHostId, templateTitle: title },
-  );
+  await menuPanel(scope).locator(".template-title").filter({ hasText: title }).first().click();
 }
 
 async function fillMenuSearch(scope: BrowserScope, value: string): Promise<void> {
-  await scope.evaluate(
-    ({ diagnostics, hostId, query }) => {
-      const shadow = document.getElementById(hostId)?.shadowRoot;
-      const searchInput = shadow?.querySelector<HTMLInputElement>("input.search");
-
-      if (!searchInput) {
-        const menuText = shadow?.querySelector(".panel")?.textContent ??
-          shadow?.textContent ??
-          "<missing shadow>";
-        throw new Error(
-          `PromptCrate search input not found. Menu text: ${menuText}\nOpen diagnostics: ${diagnostics}`,
-        );
-      }
-
-      searchInput.value = query;
-      searchInput.dispatchEvent(new Event("input", { bubbles: true }));
-    },
-    { diagnostics: lastOpenPromptDiagnostics, hostId: extensionHostId, query: value },
-  );
-  await expectMenuText(scope).toContain(value);
+  await menuPanel(scope).locator("input.search").fill(value);
 }
 
 async function clickMenuButton(scope: BrowserScope, label: string): Promise<void> {
-  await scope.evaluate(
-    ({ hostId, buttonLabel }) => {
-      const button = [...(document
-        .getElementById(hostId)
-        ?.shadowRoot?.querySelectorAll<HTMLButtonElement>("button") ?? [])]
-        .find((candidate) =>
-          candidate.textContent === buttonLabel ||
-          candidate.getAttribute("aria-label") === buttonLabel,
-        );
-
-      if (!button) {
-        throw new Error(`PromptCrate button not found: ${buttonLabel}`);
-      }
-
-      button.click();
-    },
-    { hostId: extensionHostId, buttonLabel: label },
-  );
+  await menuPanel(scope).getByRole("button", { name: label, exact: true }).click();
 }
 
 async function installEventCounters(page: Page): Promise<void> {
