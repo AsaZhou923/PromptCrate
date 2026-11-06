@@ -75,6 +75,153 @@ test.afterAll(async () => {
   });
 });
 
+test("ranked token search and tag filters work in the menu and Options with bounded results", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-ranked-search"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    const templates = [
+      createTemplate("prefix", "Rewrite concise", "A short prompt", ["writing"]),
+      createTemplate("guide", "Rewrite guide", "Another prompt", ["writing"]),
+      { ...createTemplate("body", "Body favorite", "rewrite writing in the body", ["other"]), isFavorite: true },
+    ];
+    await options.evaluate((records) => chrome.storage.local.set({ "promptCrate.templates": records }), templates);
+    await options.locator("input.search").fill("rewrite writing");
+    await expect(options.locator(".template-row")).toHaveCount(3);
+    await expect(options.locator(".template-row").first()).toContainText("Rewrite concise");
+    await options.locator("input.search").fill("#writing rewrite");
+    await expect(options.locator(".template-row")).toHaveCount(2);
+    const page = await app.context.newPage();
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    await page.locator("#textarea").focus();
+    await openPromptMenu(page, page, app);
+    const menu = menuPanel(page);
+    await menu.locator("input.search").fill("rewrite writing");
+    await expect(menu.getByRole("option")).toHaveCount(3);
+    await expect(menu.getByRole("option").first()).toContainText("Rewrite concise");
+    await menu.locator("input.search").fill("#writing rewrite");
+    await expect(menu.getByRole("option")).toHaveCount(2);
+    await menu.locator("input.search").fill("rwt");
+    await expect(menu.getByRole("option")).toHaveCount(2);
+    await clickMenuButton(page, "Close");
+    const many = Array.from({ length: 250 }, (_, index) =>
+      createTemplate(`item-${index}`, `Item ${String(index).padStart(3, "0")}`, `Value ${index}`, []));
+    await options.evaluate((records) => chrome.storage.local.set({ "promptCrate.templates": records }), many);
+    await page.locator("#textarea").focus();
+    await openPromptMenu(page, page, app);
+    await expect(menu.getByRole("option")).toHaveCount(100);
+    await expect(menu.getByRole("status")).toContainText("first 100 of 250");
+    for (let index = 0; index < 105; index += 1) await page.keyboard.press("ArrowDown");
+    await expect(menu.locator('[aria-selected="true"]')).toContainText("Item 099");
+    await menu.locator("input.search").fill("Item 249");
+    await expect(menu.getByRole("option")).toHaveCount(1);
+    await page.keyboard.press("Enter");
+    await waitForMenuClosed(page);
+    await expect(page.locator("#textarea")).toHaveValue("Value 249");
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("menu placement stays near its target and themes follow preference and system changes", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-placement-theme"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    await options.getByRole("combobox", { name: /Theme/ }).selectOption("dark");
+    await expect(options.locator("html")).toHaveAttribute("data-theme", "dark");
+    const optionsScreenshot = testInfo.outputPath("options-dark.png");
+    await options.screenshot({ path: optionsScreenshot, fullPage: true });
+    await testInfo.attach("options-dark", { path: optionsScreenshot, contentType: "image/png" });
+    const page = await app.context.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.setViewportSize({ width: 900, height: 700 });
+    await page.emulateMedia({ colorScheme: "light" });
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    await page.evaluate(() => {
+      document.documentElement.style.colorScheme = "dark";
+      document.body.style.background = "#10191d";
+      document.body.style.color = "#e2edef";
+      const target = document.createElement("textarea");
+      target.id = "bottom-target";
+      target.style.cssText = "position:fixed;right:30px;bottom:24px;width:300px;height:76px;z-index:1";
+      document.body.append(target);
+      target.focus();
+    });
+    await openPromptMenu(page, page, app);
+    const panel = menuPanel(page);
+    await expect(page.locator(`#${extensionHostId}`)).toHaveAttribute("data-theme", "dark");
+    expect(await panel.evaluate((node) => getComputedStyle(node).colorScheme)).toBe("dark");
+    const bounds = async () => {
+      const box = await panel.boundingBox();
+      const target = await page.locator("#bottom-target").boundingBox();
+      const viewport = page.viewportSize()!;
+      return Boolean(box && target && box.x >= 11 && box.y >= 11 &&
+        box.x + box.width <= viewport.width - 11 && box.y + box.height <= viewport.height - 11 &&
+        box.y + box.height <= target.y - 6);
+    };
+    await expect.poll(bounds).toBe(true);
+    const screenshotPath = testInfo.outputPath("menu-dark-position.png");
+    await page.screenshot({ path: screenshotPath });
+    await testInfo.attach("menu-dark-position", { path: screenshotPath, contentType: "image/png" });
+    await page.setViewportSize({ width: 520, height: 440 });
+    await expect.poll(bounds).toBe(true);
+    const originalPanel = await panel.elementHandle();
+    await options.getByRole("combobox", { name: /Theme/ }).selectOption("light");
+    await expect(page.locator(`#${extensionHostId}`)).toHaveAttribute("data-theme", "light");
+    expect(await panel.evaluate((node) => getComputedStyle(node).colorScheme)).toBe("light");
+    await options.getByRole("combobox", { name: /Theme/ }).selectOption("system");
+    await page.emulateMedia({ colorScheme: "dark" });
+    await expect(page.locator(`#${extensionHostId}`)).toHaveAttribute("data-theme", "dark");
+    await page.emulateMedia({ colorScheme: "light" });
+    await expect(page.locator(`#${extensionHostId}`)).toHaveAttribute("data-theme", "light");
+    expect(await originalPanel!.evaluate((node) => node.isConnected)).toBe(true);
+    expect(errors).toEqual([]);
+    await clickMenuButton(page, "Close");
+    await options.addInitScript(() => {
+      chrome.commands.getAll = (async () => [{ name: "open-prompt-menu", shortcut: "" }]) as typeof chrome.commands.getAll;
+    });
+    await options.reload();
+    await expect(options.getByRole("region", { name: "Preferences" })).toContainText("Shortcut not assigned");
+    const created = app.context.waitForEvent("page");
+    await options.getByRole("button", { name: "Configure shortcut", exact: true }).click();
+    const shortcuts = await created;
+    await shortcuts.waitForURL("chrome://extensions/shortcuts");
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("favorite markers are labelled and invalid variables receive focus and an alert", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-accessible-errors"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    await options.evaluate((record) => chrome.storage.local.set({ "promptCrate.templates": [record] }), {
+      ...createTemplate("accessible", "Accessible template", "First {{a}} Second {{b}}", []), isFavorite: true,
+    });
+    const page = await app.context.newPage();
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    await page.locator("#textarea").focus();
+    await openPromptMenu(page, page, app);
+    await expect(menuPanel(page).getByRole("img", { name: "Favorite", exact: true })).toHaveCount(1);
+    await chooseTemplateFromMenu(page, "Accessible template");
+    await menuPanel(page).getByLabel("a", { exact: true }).fill("Value");
+    await menuPanel(page).getByLabel("b", { exact: true }).fill("   ");
+    await clickMenuButton(page, "Insert");
+    await expect(menuPanel(page).getByRole("alert")).toContainText("Fill b before inserting.");
+    await expect(menuPanel(page).getByLabel("b", { exact: true })).toBeFocused();
+    await expect(menuPanel(page).getByLabel("a", { exact: true })).toHaveValue("Value");
+    await menuPanel(page).getByLabel("b", { exact: true }).fill("OK");
+    await page.keyboard.press("Control+Enter");
+    await waitForMenuClosed(page);
+    await expect(page.locator("#textarea")).toHaveValue("First Value Second OK");
+  } finally {
+    await app.context.close();
+  }
+});
+
 test("page scripts cannot read, reopen, or synthetically operate the private menu", async ({ browserName }, testInfo) => {
   expect(browserName).toBe("chromium");
   const app = await launchPromptCrate(testInfo.outputPath("profile-private-menu"));

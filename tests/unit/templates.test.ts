@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createTemplateSearch,
   extractTemplateVariables,
   normalizeTemplate,
   PromptTemplate,
@@ -213,6 +214,100 @@ describe("template validation and search", () => {
     expect(searchTemplates(templates, "root causes").map((template) => template.id)).toEqual([
       "debug-helper",
     ]);
+  });
+
+  it("matches every whitespace-separated term across title, tags, and body", () => {
+    const templates = [
+      { ...baseTemplate, body: "Improve a draft", tags: ["writing"] },
+      { ...baseTemplate, id: "other", title: "Other", body: "Rewrite a draft", tags: ["notes"] },
+    ];
+    expect(searchTemplates(templates, "  rewrite\nWRITING draft ").map((item) => item.id)).toEqual(["rewrite-clearer"]);
+    expect(searchTemplates(templates, "rewrite nonexistent")).toEqual([]);
+  });
+
+  it("uses exact case-insensitive tag filters alongside ordinary and Unicode terms", () => {
+    const templates = [
+      { ...baseTemplate, id: "translate", title: "翻译文本", body: "Polish a draft", tags: ["写作", "English"] },
+      { ...baseTemplate, id: "partial-tag", title: "翻译文本", tags: ["写作笔记", "English"] },
+    ];
+    expect(searchTemplates(templates, "翻译 #写作 #ENGLISH draft").map((item) => item.id)).toEqual(["translate"]);
+    expect(searchTemplates(templates, "#写")).toEqual([]);
+    expect(searchTemplates(templates, "#")).toEqual([]);
+  });
+
+  it("ranks title prefix, title substring, exact tag, partial tag, and body in that order", () => {
+    const templates = [
+      { ...baseTemplate, id: "body", title: "Body result", body: "needle", tags: [], isFavorite: true },
+      { ...baseTemplate, id: "partial-tag", title: "Partial result", body: "", tags: ["needles"] },
+      { ...baseTemplate, id: "tag", title: "Tag result", body: "", tags: ["needle"] },
+      { ...baseTemplate, id: "substring", title: "The needle", body: "", tags: [] },
+      { ...baseTemplate, id: "prefix", title: "Needle first", body: "", tags: [] },
+    ];
+    expect(searchTemplates(templates, "needle").map((item) => item.id)).toEqual([
+      "prefix", "substring", "tag", "partial-tag", "body",
+    ]);
+  });
+
+  it("uses title subsequence matches only after stronger field matches", () => {
+    const templates = [
+      { ...baseTemplate, id: "fuzzy", title: "Rewrite", body: "", tags: [], isFavorite: true },
+      { ...baseTemplate, id: "body", title: "Other", body: "rwt", tags: [] },
+    ];
+    expect(searchTemplates(templates, "rwt").map((item) => item.id)).toEqual(["body", "fuzzy"]);
+    expect(searchTemplates(templates, "wtr")).toEqual([]);
+  });
+
+  it("keeps all exact multi-term matches ahead of results needing fuzzy terms", () => {
+    const templates = [
+      { ...baseTemplate, id: "fuzzy", title: "Rewrite", body: "", tags: [], isFavorite: true },
+      { ...baseTemplate, id: "body", title: "Other", body: "rewrite rwt", tags: [] },
+    ];
+    expect(searchTemplates(templates, "rewrite rwt").map((item) => item.id)).toEqual(["body", "fuzzy"]);
+  });
+
+  it("uses menu order for blank queries and equal relevance without mutating inputs or cached results", () => {
+    const templates = [
+      { ...baseTemplate, id: "alpha", title: "Alpha", body: "match", tags: [] },
+      { ...baseTemplate, id: "recent", title: "Recent", body: "match", tags: [], lastUsedAt: "2026-06-02T00:00:00.000Z" },
+      { ...baseTemplate, id: "favorite", title: "Favorite", body: "match", tags: [], isFavorite: true },
+      { ...baseTemplate, id: "same-title", title: "Alpha", body: "match", tags: [] },
+    ];
+    const original = structuredClone(templates);
+    const search = createTemplateSearch(Object.freeze(templates));
+    const expected = ["favorite", "recent", "alpha", "same-title"];
+    expect(search(" \n ").map((item) => item.id)).toEqual(expected);
+    const result = search("match");
+    expect(result.map((item) => item.id)).toEqual(expected);
+    result.reverse();
+    expect(search(" MATCH ").map((item) => item.id)).toEqual(expected);
+    expect(templates).toEqual(original);
+  });
+
+  it("prepares searchable fields once when queries change", () => {
+    let canRead = true;
+    const read = <T,>(value: T): T => {
+      if (!canRead) throw new Error("Search rebuilt a template field");
+      return value;
+    };
+    const template: PromptTemplate = {
+      ...baseTemplate,
+      get title() { return read("Rewrite clearer"); },
+      get body() { return read("Improve a draft"); },
+      get tags() { return read(["writing"]); },
+    };
+    const search = createTemplateSearch([template]);
+    canRead = false;
+    for (const query of ["rewrite", "clearer writing", "#writing draft", "rwt", ""]) {
+      expect(search(query).map((item) => item.id)).toEqual(["rewrite-clearer"]);
+    }
+  });
+
+  it("builds a fresh index when the library is replaced", () => {
+    const before = createTemplateSearch([{ ...baseTemplate, title: "Legacy prompt", body: "", tags: [] }]);
+    const after = createTemplateSearch([{ ...baseTemplate, title: "Modern task", body: "", tags: [] }]);
+    expect(before("legacy").map((item) => item.id)).toEqual(["rewrite-clearer"]);
+    expect(after("legacy")).toEqual([]);
+    expect(after("modern").map((item) => item.id)).toEqual(["rewrite-clearer"]);
   });
 
   it("sorts favorites before recently used templates", () => {

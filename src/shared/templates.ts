@@ -315,27 +315,97 @@ export function normalizeTags(tags: string[]): string[] {
 }
 
 export function searchTemplates(
-  templates: PromptTemplate[],
+  templates: readonly PromptTemplate[],
   query: string,
 ): PromptTemplate[] {
-  const normalizedQuery = query.trim().toLocaleLowerCase();
-
-  if (normalizedQuery.length === 0) {
-    return [...templates];
-  }
-
-  return templates.filter((template) => {
-    const haystack = [
-      template.title,
-      template.body,
-      ...template.tags,
-    ].join(" ").toLocaleLowerCase();
-
-    return haystack.includes(normalizedQuery);
-  });
+  return createTemplateSearch(templates)(query);
 }
 
-export function sortTemplatesForMenu(templates: PromptTemplate[]): PromptTemplate[] {
+type TemplateSearchEntry = {
+  template: PromptTemplate;
+  title: string;
+  body: string;
+  tags: string[];
+  order: number;
+};
+
+export function createTemplateSearch(
+  templates: readonly PromptTemplate[],
+): (query: string) => PromptTemplate[] {
+  // Rebuild this snapshot when the library changes, rather than normalizing every keystroke.
+  const entries: TemplateSearchEntry[] = sortTemplatesForMenu(templates).map((template, order) => ({
+    template,
+    title: template.title.trim().toLocaleLowerCase(),
+    body: template.body.toLocaleLowerCase(),
+    tags: template.tags.map((tag) => tag.trim().toLocaleLowerCase()),
+    order,
+  }));
+  let previousQuery: string | undefined;
+  let previousResult: PromptTemplate[] = [];
+
+  return (query) => {
+    const terms = [...new Set(query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean))];
+    const normalizedQuery = terms.join(" ");
+    if (normalizedQuery === previousQuery) {
+      return [...previousResult];
+    }
+
+    const matches: Array<{ entry: TemplateSearchEntry; score: number; fuzzyTerms: number }> = [];
+    for (const entry of entries) {
+      let score = 0;
+      let fuzzyTerms = 0;
+      let matchesAll = true;
+      for (const term of terms) {
+        const match = matchSearchTerm(entry, term);
+        if (!match) {
+          matchesAll = false;
+          break;
+        }
+        score += match.score;
+        fuzzyTerms += match.fuzzy ? 1 : 0;
+      }
+      if (matchesAll) {
+        matches.push({ entry, score, fuzzyTerms });
+      }
+    }
+    matches.sort((left, right) =>
+      left.fuzzyTerms - right.fuzzyTerms || right.score - left.score || left.entry.order - right.entry.order);
+    previousQuery = normalizedQuery;
+    previousResult = matches.map((match) => match.entry.template);
+    return [...previousResult];
+  };
+}
+
+function matchSearchTerm(
+  entry: TemplateSearchEntry,
+  term: string,
+): { score: number; fuzzy: boolean } | null {
+  if (term.startsWith("#")) {
+    return entry.tags.includes(term.slice(1)) ? { score: 0, fuzzy: false } : null;
+  }
+  const score = entry.title.startsWith(term) ? 5
+    : entry.title.includes(term) ? 4
+    : entry.tags.includes(term) ? 3
+    : entry.tags.some((tag) => tag.includes(term)) ? 2
+    : entry.body.includes(term) ? 1
+    : 0;
+  if (score > 0) {
+    return { score, fuzzy: false };
+  }
+  let next = 0;
+  const characters = [...term];
+  for (const character of entry.title) {
+    if (character === characters[next]) {
+      next += 1;
+      if (next === characters.length) {
+        return { score: 0, fuzzy: true };
+      }
+    }
+  }
+  return null;
+}
+
+export function sortTemplatesForMenu(templates: readonly PromptTemplate[]): PromptTemplate[] {
   return [...templates].sort((left, right) => {
     if (left.isFavorite !== right.isFavorite) {
       return left.isFavorite ? -1 : 1;

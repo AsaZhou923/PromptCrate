@@ -10,6 +10,8 @@ import { isTemplateMutation } from "../shared/template-mutations";
 const OPEN_PROMPT_COMMAND = "open-prompt-menu";
 const CONTENT_SCRIPT_FILE = "content-entry.js";
 const templateStore = createTemplateStore();
+const activeOpenRequests = new Map<number, number>();
+let openRequestSequence = 0;
 
 chrome.runtime.onInstalled.addListener(() => {
   void templateStore.read().catch((error: unknown) => {
@@ -75,13 +77,38 @@ async function openPromptMenuForActiveTab(): Promise<void> {
 }
 
 async function openPromptMenuForTab(tabId: number): Promise<void> {
-  const didInject = await injectContentScript(tabId);
-  if (!didInject) {
-    return;
-  }
+  const request = ++openRequestSequence;
+  activeOpenRequests.set(tabId, request);
+  try {
+    await updateActivationFeedback(tabId, request);
+    const didInject = await injectContentScript(tabId);
+    if (!didInject) {
+      await updateActivationFeedback(tabId, request,
+        "PromptCrate could not open here. Try a regular web page, or reload the page.");
+      return;
+    }
 
-  const frameIds = await getPromptMenuFrameIds(tabId);
-  await sendOpenPromptMenu(tabId, frameIds);
+    const frameIds = await getPromptMenuFrameIds(tabId);
+    if (!await sendOpenPromptMenu(tabId, frameIds)) {
+      await updateActivationFeedback(tabId, request,
+        "PromptCrate could not reach this page. Reload it and try again.");
+    }
+  } finally {
+    if (activeOpenRequests.get(tabId) === request) activeOpenRequests.delete(tabId);
+  }
+}
+
+async function updateActivationFeedback(tabId: number, request: number, message?: string): Promise<void> {
+  if (activeOpenRequests.get(tabId) !== request) return;
+  try {
+    await Promise.all([
+      chrome.action.setBadgeText({ tabId, text: message ? "!" : "" }),
+      chrome.action.setTitle({ tabId, title: message ?? "PromptCrate" }),
+      ...(message ? [chrome.action.setBadgeBackgroundColor({ tabId, color: "#b33e32" })] : []),
+    ]);
+  } catch (error) {
+    console.warn("[prompt-crate] Could not update activation feedback", getErrorMessage(error));
+  }
 }
 
 function reportActivationError(error: unknown): void {
@@ -131,7 +158,7 @@ async function getPromptMenuFrameIds(tabId: number): Promise<number[]> {
   }
 }
 
-async function sendOpenPromptMenu(tabId: number, frameIds: number[]): Promise<void> {
+async function sendOpenPromptMenu(tabId: number, frameIds: number[]): Promise<boolean> {
   let didSend = false;
 
   for (const frameId of frameIds) {
@@ -155,6 +182,7 @@ async function sendOpenPromptMenu(tabId: number, frameIds: number[]): Promise<vo
   if (!didSend) {
     console.warn("[prompt-crate] No frame accepted OPEN_PROMPT_MENU");
   }
+  return didSend;
 }
 
 async function broadcastTemplatesUpdated(): Promise<void> {
