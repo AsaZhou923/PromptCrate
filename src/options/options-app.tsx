@@ -8,11 +8,14 @@ import {
 import { loadPromptTemplates, commitTemplateMutation } from "../shared/template-client";
 import { sameTemplateRevision, type TemplateMutation, type MutationResult } from "../shared/template-mutations";
 import {
+  getThemePreference, observeTheme, parseThemePreference, setThemePreference,
+  THEME_STORAGE_KEY, THEME_STYLES, type ThemePreference,
+} from "../shared/theme";
+import {
   normalizeTags,
   normalizeTemplate,
   PromptTemplate,
-  searchTemplates,
-  sortTemplatesForMenu,
+  createTemplateSearch,
   STORAGE_KEYS,
   validateTemplate,
 } from "../shared/templates";
@@ -53,6 +56,40 @@ function OptionsApp() {
   const [status, setStatus] = useState("Loading templates...");
   const [error, setError] = useState<string | null>(null);
   const [pendingImport, setPendingImport] = useState<TemplateExportPayload | null>(null);
+  const [theme, setTheme] = useState<ThemePreference>("system");
+  const [themeSaving, setThemeSaving] = useState(false);
+  const [shortcut, setShortcut] = useState<string | null | undefined>(undefined);
+  const [preferencesError, setPreferencesError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    let preferenceChanged = false;
+    const stopObserving = observeTheme(document.documentElement);
+    const onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area !== "local" || !(THEME_STORAGE_KEY in changes)) return;
+      preferenceChanged = true;
+      setTheme(parseThemePreference(changes[THEME_STORAGE_KEY].newValue));
+    };
+    chrome.storage.onChanged.addListener(onChanged);
+    void getThemePreference().then((value) => {
+      if (mounted && !preferenceChanged) setTheme(value);
+    }).catch((error: unknown) => {
+      if (mounted) setPreferencesError(`Could not load theme. ${getErrorMessage(error)}`);
+    });
+    void chrome.commands.getAll().then((commands) => {
+      if (mounted) setShortcut(commands.find((command) => command.name === "open-prompt-menu")?.shortcut ?? "");
+    }).catch((error: unknown) => {
+      if (mounted) {
+        setShortcut(null);
+        setPreferencesError(`Could not read the shortcut. ${getErrorMessage(error)}`);
+      }
+    });
+    return () => {
+      mounted = false;
+      stopObserving();
+      chrome.storage.onChanged.removeListener(onChanged);
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -123,10 +160,8 @@ function OptionsApp() {
     [selectedId, templates],
   );
 
-  const visibleTemplates = useMemo(
-    () => sortTemplatesForMenu(searchTemplates(templates, query)),
-    [query, templates],
-  );
+  const search = useMemo(() => createTemplateSearch(templates), [templates]);
+  const visibleTemplates = useMemo(() => search(query), [query, search]);
   const hasConflict = baseline !== null && !sameTemplateRevision(selectedTemplate, baseline);
 
   function selectTemplate(template: PromptTemplate): void {
@@ -138,6 +173,28 @@ function OptionsApp() {
     replaceEditor(EMPTY_EDITOR);
     setError(null);
     setStatus("New template.");
+  }
+
+  async function changeTheme(value: ThemePreference): Promise<void> {
+    setThemeSaving(true);
+    setPreferencesError(null);
+    try {
+      await setThemePreference(value);
+      setTheme(value);
+    } catch (error) {
+      setPreferencesError(`Could not save the theme. ${getErrorMessage(error)}`);
+    } finally {
+      setThemeSaving(false);
+    }
+  }
+
+  async function configureShortcut(): Promise<void> {
+    setPreferencesError(null);
+    try {
+      await chrome.tabs.create({ url: "chrome://extensions/shortcuts" });
+    } catch (error) {
+      setPreferencesError(`Could not open shortcut settings. ${getErrorMessage(error)}`);
+    }
   }
 
   async function saveTemplate(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -319,6 +376,24 @@ function OptionsApp() {
             New
           </button>
         </div>
+
+        <section className="preferences" aria-label="Preferences">
+          <label>
+            <span>Theme</span>
+            <select value={theme} disabled={themeSaving} onChange={(event) => void changeTheme(event.target.value as ThemePreference)}>
+              <option value="system">System</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
+          <p className="muted">
+            {shortcut === undefined ? "Loading shortcut..." : shortcut === null
+              ? "Shortcut unavailable. Use the toolbar button or configure a shortcut." : shortcut
+              ? `Shortcut: ${shortcut}` : "Shortcut not assigned. Use the toolbar button or configure a shortcut."}
+          </p>
+          <button type="button" onClick={() => void configureShortcut()}>Configure shortcut</button>
+          {preferencesError ? <p className="preference-error" role="status">{preferencesError}</p> : null}
+        </section>
 
         <input
           className="search"
@@ -521,11 +596,11 @@ function getErrorMessage(error: unknown): string {
 }
 
 const OPTIONS_STYLES = `
+  ${THEME_STYLES}
   :root {
-    color-scheme: light;
     font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    color: #172026;
-    background: #f8faf9;
+    color: var(--pc-text);
+    background: var(--pc-bg);
   }
 
   * {
@@ -545,15 +620,16 @@ const OPTIONS_STYLES = `
 
   button,
   input,
-  textarea {
+  textarea,
+  select {
     font: inherit;
   }
 
   button {
-    border: 1px solid #b8c6cf;
+    border: 1px solid var(--pc-border);
     border-radius: 7px;
-    color: #172026;
-    background: #fff;
+    color: var(--pc-text);
+    background: var(--pc-input);
     cursor: pointer;
   }
 
@@ -564,7 +640,7 @@ const OPTIONS_STYLES = `
 
   button:hover:not(:disabled),
   button:focus-visible {
-    border-color: #2f7f78;
+    border-color: var(--pc-accent);
     outline: none;
   }
 
@@ -576,12 +652,13 @@ const OPTIONS_STYLES = `
 
   .sidebar {
     display: grid;
-    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    grid-template-rows: auto auto auto minmax(0, 1fr) auto;
     gap: 12px;
-    min-height: 100vh;
+    min-height: 0;
+    height: 100vh;
     padding: 18px;
-    border-right: 1px solid #d8e2e6;
-    background: #fffdf8;
+    border-right: 1px solid var(--pc-divider);
+    background: var(--pc-surface);
   }
 
   .toolbar,
@@ -621,23 +698,25 @@ const OPTIONS_STYLES = `
   }
 
   .primary {
-    color: #fff;
-    border-color: #256b65;
-    background: #2f7f78;
+    color: var(--pc-accent-text);
+    border-color: var(--pc-accent);
+    background: var(--pc-accent);
   }
 
   .search,
   input,
-  textarea {
+  textarea,
+  select {
     width: 100%;
-    border: 1px solid #b8c6cf;
+    border: 1px solid var(--pc-border);
     border-radius: 7px;
-    color: #172026;
-    background: #fff;
+    color: var(--pc-text);
+    background: var(--pc-input);
   }
 
   .search,
-  input {
+  input,
+  select {
     min-height: 38px;
     padding: 8px 10px;
   }
@@ -649,9 +728,10 @@ const OPTIONS_STYLES = `
   }
 
   input:focus,
-  textarea:focus {
-    border-color: #2f7f78;
-    outline: 2px solid rgba(47, 127, 120, 0.2);
+  textarea:focus,
+  select:focus {
+    border-color: var(--pc-accent);
+    outline: 2px solid var(--pc-focus);
   }
 
   .template-list {
@@ -667,12 +747,12 @@ const OPTIONS_STYLES = `
     min-height: 58px;
     padding: 9px;
     text-align: left;
-    background: #f6f0e7;
+    background: var(--pc-item);
   }
 
   .template-row.selected {
-    border-color: #2f7f78;
-    background: #ecf4f1;
+    border-color: var(--pc-accent);
+    background: var(--pc-selected);
   }
 
   .row-title {
@@ -683,28 +763,45 @@ const OPTIONS_STYLES = `
   .row-tags,
   .muted,
   .status {
-    color: #526470;
+    color: var(--pc-muted);
     font-size: 12px;
   }
 
   .status.error {
-    color: #9f3228;
+    color: var(--pc-danger);
+  }
+
+  .preferences {
+    display: grid;
+    gap: 8px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--pc-divider);
+  }
+
+  .preferences button {
+    min-height: 34px;
+    padding: 7px 10px;
+  }
+
+  .preference-error {
+    color: var(--pc-danger);
+    font-size: 12px;
   }
 
   .import-export {
     display: grid;
     gap: 8px;
     padding-top: 12px;
-    border-top: 1px solid #d8e2e6;
+    border-top: 1px solid var(--pc-divider);
   }
 
   .file-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border: 1px solid #b8c6cf;
+    border: 1px solid var(--pc-border);
     border-radius: 7px;
-    background: #fff;
+    background: var(--pc-input);
     cursor: pointer;
   }
 
@@ -736,7 +833,7 @@ const OPTIONS_STYLES = `
   label {
     display: grid;
     gap: 6px;
-    color: #334650;
+    color: var(--pc-text);
     font-size: 12px;
     font-weight: 700;
   }
@@ -764,8 +861,9 @@ const OPTIONS_STYLES = `
 
     .sidebar {
       min-height: auto;
+      height: auto;
       border-right: 0;
-      border-bottom: 1px solid #d8e2e6;
+      border-bottom: 1px solid var(--pc-divider);
     }
 
     .form-grid {

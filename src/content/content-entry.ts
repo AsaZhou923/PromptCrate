@@ -5,12 +5,13 @@ import {
 } from "./input-target";
 import { MESSAGE_TYPE, isRuntimeMessage } from "../shared/message-contract";
 import { loadPromptTemplates, commitTemplateMutation } from "../shared/template-client";
+import { calculateMenuPosition } from "./menu-position";
+import { observeTheme, THEME_STYLES } from "../shared/theme";
 import {
   extractTemplateVariables,
   PromptTemplate,
   renderTemplate,
-  searchTemplates,
-  sortTemplatesForMenu,
+  createTemplateSearch,
   TemplateVariable,
 } from "../shared/templates";
 
@@ -22,11 +23,12 @@ declare global {
 
 const HOST_ID = "promptcrate-menu-host";
 const MENU_WIDTH = 420;
+const MAX_VISIBLE_RESULTS = 100;
 
 type MenuState = {
   host: HTMLDivElement;
   shadow: ShadowRoot;
-  templates: PromptTemplate[];
+  search: ReturnType<typeof createTemplateSearch>;
   query: string;
   selectedIndex: number;
   isComposing: boolean;
@@ -34,6 +36,7 @@ type MenuState = {
   chosenTemplate: PromptTemplate | null;
   values: Record<string, string>;
   error: string | null;
+  invalidVariable: string | null;
 };
 
 if (!window.__promptCrateContentEntryLoaded) {
@@ -45,6 +48,10 @@ if (!window.__promptCrateContentEntryLoaded) {
     (element) => element === menuHost?.host,
   );
   let state: MenuState | null = null;
+  let positionFrame: number | null = null;
+  let panelObserver: ResizeObserver | null = null;
+  window.addEventListener("resize", schedulePosition);
+  document.addEventListener("scroll", schedulePosition, true);
 
   chrome.runtime.onMessage.addListener((message: unknown) => {
     if (!isRuntimeMessage(message)) {
@@ -77,7 +84,7 @@ if (!window.__promptCrateContentEntryLoaded) {
     const openingState: MenuState = {
       host,
       shadow,
-      templates: [],
+      search: createTemplateSearch([]),
       query: "",
       selectedIndex: 0,
       isComposing: false,
@@ -85,6 +92,7 @@ if (!window.__promptCrateContentEntryLoaded) {
       chosenTemplate: null,
       values: {},
       error: savedSelection ? null : "Focus a text field before opening PromptCrate. Read-only and disabled fields are not supported.",
+      invalidVariable: null,
     };
 
     state = openingState;
@@ -102,7 +110,7 @@ if (!window.__promptCrateContentEntryLoaded) {
       if (state !== openingState) {
         return;
       }
-      openingState.templates = sortTemplatesForMenu(templates);
+      openingState.search = createTemplateSearch(templates);
     } catch (error) {
       if (state !== openingState) {
         return;
@@ -125,7 +133,7 @@ if (!window.__promptCrateContentEntryLoaded) {
         return;
       }
 
-      currentState.templates = sortTemplatesForMenu(templates);
+      currentState.search = createTemplateSearch(templates);
       if (!currentState.chosenTemplate && !currentState.isComposing) {
         updateTemplateResults();
       }
@@ -147,9 +155,9 @@ if (!window.__promptCrateContentEntryLoaded) {
     host.style.zIndex = "2147483647";
     host.style.width = `${MENU_WIDTH}px`;
     host.style.maxWidth = "calc(100vw - 24px)";
-    host.style.top = "72px";
-    host.style.left = "50%";
-    host.style.transform = "translateX(-50%)";
+    host.style.top = "12px";
+    host.style.left = "12px";
+    observeTheme(host);
     const shadow = host.attachShadow({ mode: "closed" });
     // Gate control actions: Chromium can emit an untrusted compositionend for a native IME commit.
     for (const type of [
@@ -191,6 +199,40 @@ if (!window.__promptCrateContentEntryLoaded) {
       document.documentElement.appendChild(host);
     }
     host.style.display = "block";
+    schedulePosition();
+  }
+
+  function schedulePosition(): void {
+    if (!state || positionFrame !== null) return;
+    positionFrame = requestAnimationFrame(() => {
+      positionFrame = null;
+      if (!state) return;
+      const panel = state.shadow.querySelector<HTMLElement>(".panel");
+      if (!panel) return;
+      let anchor = null;
+      const saved = state.savedSelection;
+      if (saved?.target.isConnected) {
+        if (saved.kind === "contenteditable" && saved.range) {
+          try {
+            const rect = saved.range.getBoundingClientRect();
+            if (rect.width > 0 || rect.height > 0) anchor = rect;
+          } catch { /* A page edit may have invalidated the saved range. */ }
+        }
+        anchor ??= saved.target.getBoundingClientRect();
+      }
+      const rect = panel.getBoundingClientRect();
+      const position = calculateMenuPosition(anchor, rect, { width: innerWidth, height: innerHeight });
+      state.host.style.left = `${position.left}px`;
+      state.host.style.top = `${position.top}px`;
+      panel.style.maxHeight = `${Math.min(620, position.maxHeight)}px`;
+    });
+  }
+
+  function observePanel(panel: HTMLElement): void {
+    panelObserver?.disconnect();
+    panelObserver = new ResizeObserver(schedulePosition);
+    panelObserver.observe(panel);
+    schedulePosition();
   }
 
   function closeMenu(): void {
@@ -201,6 +243,10 @@ if (!window.__promptCrateContentEntryLoaded) {
     const focusTarget = state.savedSelection?.target;
     state.host.style.display = "none";
     state.shadow.textContent = "";
+    panelObserver?.disconnect();
+    panelObserver = null;
+    if (positionFrame !== null) cancelAnimationFrame(positionFrame);
+    positionFrame = null;
     detachOutsideClickHandler();
     state = null;
 
@@ -254,6 +300,7 @@ if (!window.__promptCrateContentEntryLoaded) {
     if (state.error && !state.savedSelection) {
       panel.append(createHeader("PromptCrate"), createNotice(state.error));
       state.shadow.append(panel);
+      observePanel(panel);
       queueMicrotask(() => {
         panel.focus();
       });
@@ -267,6 +314,7 @@ if (!window.__promptCrateContentEntryLoaded) {
     }
 
     state.shadow.append(panel);
+    observePanel(panel);
   }
 
   function createHeader(title: string): HTMLElement {
@@ -355,6 +403,7 @@ if (!window.__promptCrateContentEntryLoaded) {
     const searchInput = state?.shadow.querySelector<HTMLInputElement>("input.search");
     if (list && searchInput) {
       renderTemplateResults(list, searchInput);
+      schedulePosition();
     }
   }
 
@@ -363,7 +412,8 @@ if (!window.__promptCrateContentEntryLoaded) {
       return;
     }
 
-    const filteredTemplates = getFilteredTemplates();
+    const matches = state.search(state.query);
+    const filteredTemplates = matches.slice(0, MAX_VISIBLE_RESULTS);
     state.selectedIndex = Math.min(state.selectedIndex, Math.max(filteredTemplates.length - 1, 0));
     list.replaceChildren();
     list.scrollTop = 0;
@@ -389,7 +439,14 @@ if (!window.__promptCrateContentEntryLoaded) {
 
         const title = document.createElement("span");
         title.className = "template-title";
-        title.textContent = template.isFavorite ? `* ${template.title}` : template.title;
+        if (template.isFavorite) {
+          const favorite = document.createElement("span");
+          favorite.textContent = "★ ";
+          favorite.setAttribute("role", "img");
+          favorite.setAttribute("aria-label", "Favorite");
+          title.append(favorite);
+        }
+        title.append(document.createTextNode(template.title));
 
         const body = document.createElement("span");
         body.className = "template-body";
@@ -402,6 +459,9 @@ if (!window.__promptCrateContentEntryLoaded) {
         item.append(title, body, tags);
         list.append(item);
       });
+    }
+    if (matches.length > MAX_VISIBLE_RESULTS) {
+      list.append(createNotice(`Showing the first ${MAX_VISIBLE_RESULTS} of ${matches.length} matches. Refine your search.`));
     }
 
     updateSelectedTemplate(list, searchInput);
@@ -544,6 +604,7 @@ if (!window.__promptCrateContentEntryLoaded) {
     }
 
     state.chosenTemplate = template;
+    state.invalidVariable = null;
     state.values = {};
     state.error = null;
     renderMenu();
@@ -578,6 +639,7 @@ if (!window.__promptCrateContentEntryLoaded) {
 
       const input = document.createElement("textarea");
       input.rows = 2;
+      input.dataset.variableName = variable.name;
       input.value = getVariableValue(variable.name);
       input.required = variable.required;
       input.addEventListener("input", () => {
@@ -626,6 +688,7 @@ if (!window.__promptCrateContentEntryLoaded) {
       state.chosenTemplate = null;
       state.values = {};
       state.error = null;
+      state.invalidVariable = null;
       renderMenu({ focusSearch: true });
     });
 
@@ -640,7 +703,8 @@ if (!window.__promptCrateContentEntryLoaded) {
 
     queueMicrotask(() => {
       wrapper.querySelectorAll("textarea").forEach(resizeVariableInput);
-      wrapper.querySelector("textarea")?.focus();
+      const fields = [...wrapper.querySelectorAll("textarea")];
+      (fields.find((field) => field.dataset.variableName === state?.invalidVariable) ?? fields[0])?.focus();
     });
 
     return wrapper;
@@ -669,6 +733,7 @@ if (!window.__promptCrateContentEntryLoaded) {
     );
 
     if (missingVariable) {
+      state.invalidVariable = missingVariable.name;
       state.error = `Fill ${missingVariable.name} before inserting.`;
       renderMenu();
       return;
@@ -713,7 +778,7 @@ if (!window.__promptCrateContentEntryLoaded) {
       return [];
     }
 
-    return sortTemplatesForMenu(searchTemplates(state.templates, state.query));
+    return state.search(state.query).slice(0, MAX_VISIBLE_RESULTS);
   }
 
   function updatePreview(form: HTMLElement, template: PromptTemplate): void {
@@ -730,15 +795,16 @@ if (!window.__promptCrateContentEntryLoaded) {
   function createNotice(message: string, tone: "info" | "error" = "info"): HTMLElement {
     const notice = document.createElement("p");
     notice.className = `notice ${tone}`;
+    notice.setAttribute("role", tone === "error" ? "alert" : "status");
+    notice.setAttribute("aria-live", tone === "error" ? "assertive" : "polite");
     notice.textContent = message;
     return notice;
   }
 
   function createStyles(): HTMLStyleElement {
     const style = document.createElement("style");
-    style.textContent = `
+    style.textContent = THEME_STYLES + `
       :host {
-        color-scheme: light;
         font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
 
@@ -750,13 +816,13 @@ if (!window.__promptCrateContentEntryLoaded) {
         display: flex;
         flex-direction: column;
         width: 100%;
-        max-height: min(620px, calc(100vh - 96px));
+        max-height: min(620px, calc(100vh - 24px));
         overflow: hidden;
-        color: #172026;
-        background: #fffdf8;
-        border: 1px solid #c9d4dc;
+        color: var(--pc-text);
+        background: var(--pc-surface);
+        border: 1px solid var(--pc-border);
         border-radius: 8px;
-        box-shadow: 0 18px 48px rgba(23, 32, 38, 0.18);
+        box-shadow: 0 18px 48px var(--pc-shadow);
       }
 
       .header {
@@ -766,7 +832,7 @@ if (!window.__promptCrateContentEntryLoaded) {
         justify-content: space-between;
         gap: 12px;
         padding: 12px 14px;
-        border-bottom: 1px solid #e2e8ec;
+        border-bottom: 1px solid var(--pc-divider);
       }
 
       h2 {
@@ -789,37 +855,43 @@ if (!window.__promptCrateContentEntryLoaded) {
         height: 28px;
         border: 0;
         border-radius: 6px;
-        color: #41515d;
+        color: var(--pc-muted);
         background: transparent;
         cursor: pointer;
       }
 
       .icon-button:hover,
       .icon-button:focus-visible {
-        background: #eef3f4;
+        background: var(--pc-selected);
         outline: none;
       }
 
       .list-view {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
         padding: 12px;
       }
 
       .search {
+        flex-shrink: 0;
         width: 100%;
         padding: 9px 10px;
-        color: #172026;
-        border: 1px solid #b8c6cf;
+        color: var(--pc-text);
+        border: 1px solid var(--pc-border);
         border-radius: 7px;
-        background: #ffffff;
+        background: var(--pc-input);
       }
 
       .search:focus {
-        border-color: #2f7f78;
-        outline: 2px solid rgba(47, 127, 120, 0.2);
+        border-color: var(--pc-accent);
+        outline: 2px solid var(--pc-focus);
       }
 
       .template-list {
         display: grid;
+        min-height: 0;
+        flex: 1 1 auto;
         gap: 6px;
         max-height: 420px;
         margin-top: 10px;
@@ -833,17 +905,17 @@ if (!window.__promptCrateContentEntryLoaded) {
         min-height: 72px;
         padding: 10px;
         text-align: left;
-        color: #172026;
+        color: var(--pc-text);
         border: 1px solid transparent;
         border-radius: 7px;
-        background: #f6f0e7;
+        background: var(--pc-item);
         cursor: pointer;
       }
 
       .template-item:hover,
       .template-item.selected {
-        border-color: #2f7f78;
-        background: #ecf4f1;
+        border-color: var(--pc-accent);
+        background: var(--pc-selected);
       }
 
       .template-title {
@@ -853,7 +925,7 @@ if (!window.__promptCrateContentEntryLoaded) {
       .template-body,
       .template-tags {
         overflow: hidden;
-        color: #526470;
+        color: var(--pc-muted);
         font-size: 12px;
         line-height: 1.35;
         text-overflow: ellipsis;
@@ -871,7 +943,7 @@ if (!window.__promptCrateContentEntryLoaded) {
       .field {
         display: grid;
         gap: 5px;
-        color: #334650;
+        color: var(--pc-muted);
         font-size: 12px;
         font-weight: 700;
       }
@@ -882,15 +954,15 @@ if (!window.__promptCrateContentEntryLoaded) {
         max-height: 160px;
         resize: vertical;
         padding: 8px 10px;
-        color: #172026;
-        border: 1px solid #b8c6cf;
+        color: var(--pc-text);
+        border: 1px solid var(--pc-border);
         border-radius: 7px;
-        background: #ffffff;
+        background: var(--pc-input);
       }
 
       .form-hint {
         margin: 0;
-        color: #526470;
+        color: var(--pc-muted);
         font-size: 12px;
         font-weight: 400;
       }
@@ -900,9 +972,9 @@ if (!window.__promptCrateContentEntryLoaded) {
         margin: 0;
         overflow: auto;
         white-space: pre-wrap;
-        color: #20313a;
-        background: #f2f7f5;
-        border: 1px solid #d6e2de;
+        color: var(--pc-text);
+        background: var(--pc-preview-bg);
+        border: 1px solid var(--pc-preview-border);
         border-radius: 7px;
         padding: 10px;
       }
@@ -916,27 +988,42 @@ if (!window.__promptCrateContentEntryLoaded) {
       .actions button {
         min-width: 76px;
         padding: 8px 10px;
-        border: 1px solid #b8c6cf;
+        border: 1px solid var(--pc-border);
         border-radius: 7px;
-        color: #172026;
-        background: #ffffff;
+        color: var(--pc-text);
+        background: var(--pc-input);
         cursor: pointer;
       }
 
       .actions .primary {
-        color: #ffffff;
-        border-color: #256b65;
-        background: #2f7f78;
+        color: var(--pc-accent-text);
+        border-color: var(--pc-accent);
+        background: var(--pc-accent);
       }
 
       .notice {
         margin: 12px;
-        color: #526470;
+        color: var(--pc-muted);
         line-height: 1.4;
       }
 
       .notice.error {
-        color: #9f3228;
+        color: var(--pc-danger);
+      }
+
+      @media (max-height: 240px) {
+        .panel {
+          display: block;
+          overflow: auto;
+        }
+
+        .list-view {
+          display: block;
+        }
+
+        .template-list {
+          max-height: 160px;
+        }
       }
     `;
     return style;
