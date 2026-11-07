@@ -3,3 +3,7 @@ packages:
 
 allowBuilds:
   esbuild: true
+
+overrides:
+  # GHSA-g3hv-75wg-m249: remove after upstream consumers use a patched minimatch.
+  'minimatch@>=7.0.0 <11.0.1': '^11.0.1'

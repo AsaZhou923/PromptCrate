@@ -2,7 +2,7 @@
 
 ## 权限说明
 
-PromptCrate v0.0.0-phase10 使用 Manifest V3，并只申请 MVP 必需权限：
+PromptCrate 使用 Manifest V3，并只申请 MVP 必需权限：
 
 | 权限 | 用途 |
 |---|---|
