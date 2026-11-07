@@ -17,27 +17,77 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9.15.9
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: 24
-          cache: pnpm
+          package-manager-cache: false
+      - uses: pnpm/action-setup@v6.1.1
+        with:
+          cache: true
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm lint
       - run: pnpm check
+      - run: pnpm audit --audit-level moderate
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
         env:
           PROMPTCRATE_E2E_HEADLESS: "1"
-      - uses: actions/upload-artifact@v4
+      - run: pnpm verify:dist
+      - run: pnpm package:zip
+      - run: unzip -t release/*.zip
+      - name: Verify the extracted release archive
+        shell: pwsh
+        run: |
+          $version = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
+          $archive = Join-Path release "promptcrate-$version.zip"
+          $extracted = Join-Path $env:RUNNER_TEMP ("promptcrate-archive-" + [guid]::NewGuid())
+          Expand-Archive -LiteralPath $archive -DestinationPath $extracted
+          pnpm verify:dist --dist-dir $extracted
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: promptcrate-extension
+          path: release/*.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7.0.2
         if: failure()
         with:
           name: playwright-failure-results
           path: output/
           retention-days: 7
+
+  portable-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: pnpm/action-setup@v6.1.1
+        with:
+          cache: true
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm dev:smoke
+      - run: pnpm verify:dist
+      - run: pnpm package:zip
+      - name: Verify the extracted release archive
+        shell: pwsh
+        run: |
+          $version = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
+          $archive = Join-Path release "promptcrate-$version.zip"
+          $extracted = Join-Path $env:RUNNER_TEMP ("promptcrate-archive-" + [guid]::NewGuid())
+          Expand-Archive -LiteralPath $archive -DestinationPath $extracted
+          pnpm verify:dist --dist-dir $extracted
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

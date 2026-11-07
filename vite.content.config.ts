@@ -1,5 +1,8 @@
 import { defineConfig } from "vite";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const repoRoot = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   build: {
@@ -7,7 +10,7 @@ export default defineConfig({
     emptyOutDir: false,
     copyPublicDir: false,
     lib: {
-      entry: resolve(__dirname, "src/content/content-entry.ts"),
+      entry: resolve(repoRoot, "src/content/content-entry.ts"),
       formats: ["iife"],
       name: "PromptCrateContentEntry",
       fileName: () => "content-entry.js",
