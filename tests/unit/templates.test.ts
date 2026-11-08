@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  createDefaultTemplates,
   createTemplateSearch,
   extractTemplateVariables,
+  getTemplateDefaultValues,
   normalizeTemplate,
   PromptTemplate,
   renderTemplate,
@@ -20,7 +22,156 @@ const baseTemplate: PromptTemplate = {
   updatedAt: "2026-06-01T00:00:00.000Z",
 };
 
+describe("localized default templates", () => {
+  it("keeps the English seeds and creates valid Chinese templates with the same variable names", () => {
+    const now = "2026-11-08T00:00:00.000Z";
+    const english = createDefaultTemplates(now, "en");
+    const chinese = createDefaultTemplates(now, "zh_CN");
+    expect(english).toHaveLength(7);
+    expect(english[0]).toEqual({
+      id: "summarize-page",
+      title: "Summarize page",
+      body: "Summarize the key ideas from this page in concise bullets.",
+      tags: ["summary", "reading"],
+      isFavorite: false,
+      createdAt: now,
+      updatedAt: now,
+    });
+    expect(english[1].body).toBe("Rewrite the following text so it is clearer, shorter, and keeps the original meaning:\n\n{{text}}");
+    expect(chinese.map((template) => template.id)).toEqual(english.map((template) => template.id));
+    for (const [index, template] of chinese.entries()) {
+      expect(template.title).not.toBe(english[index].title);
+      expect(template.createdAt).toBe(now);
+      expect(template.updatedAt).toBe(now);
+      expect(template.isFavorite).toBe(false);
+      expect(validateTemplate(template)).toEqual([]);
+      expect(extractTemplateVariables(template.body).map((variable) => variable.name))
+        .toEqual(extractTemplateVariables(english[index].body).map((variable) => variable.name));
+    }
+  });
+});
+
 describe("template variables", () => {
+  it("extracts defaults, enum choices, optional fields, and quoted labels", () => {
+    const body = '{{tone=friendly}} {{style|formal| casual |formal}} {{signature?=Regards}} {{text "要改写的文本"}} {{語 調? "語調"|丁寧|自然}}';
+    expect(extractTemplateVariables(body)).toEqual([
+      { name: "tone", required: true, defaultValue: "friendly" },
+      { name: "style", required: true, options: ["formal", "casual"] },
+      { name: "signature", required: false, defaultValue: "Regards" },
+      { name: "text", required: true, label: "要改写的文本" },
+      { name: "語 調", required: false, label: "語調", options: ["丁寧", "自然"] },
+    ]);
+    expect(validateTemplate({ ...baseTemplate, body })).toEqual([]);
+    expect(getTemplateDefaultValues(body)).toEqual({ tone: "friendly", style: "formal", signature: "Regards", text: "", "語 調": "" });
+  });
+
+  it("uses the first modifier outside a quoted label", () => {
+    const body = '{{tone "Tone = A | B"=friendly|warm=kind}} {{style|a=b|c=d}}';
+    expect(extractTemplateVariables(body)).toEqual([
+      { name: "tone", required: true, label: "Tone = A | B", defaultValue: "friendly|warm=kind" },
+      { name: "style", required: true, options: ["a=b", "c=d"] },
+    ]);
+    expect(renderTemplate(body, {})).toBe("friendly|warm=kind a=b");
+  });
+
+  it("decodes JSON label escapes without evaluating label text", () => {
+    const body = String.raw`{{text "A \"quoted\" {label}\n\u6587"=hello}}`;
+    expect(extractTemplateVariables(body)).toEqual([
+      { name: "text", required: true, label: 'A "quoted" {label}\n文', defaultValue: "hello" },
+    ]);
+    expect(validateTemplate({ ...baseTemplate, body })).toEqual([]);
+    expect(renderTemplate(body, {})).toBe("hello");
+  });
+
+  it.each([
+    ['{{text "unterminated}}', "Invalid variable label: text"],
+    [String.raw`{{text "bad\q"}}`, "Invalid variable label: text"],
+    ['{{text "label" suffix}}', "Invalid variable label: text"],
+    ["{{tone|formal||casual}}", "Invalid variable options: tone"],
+    ["{{tone|}}", "Invalid variable options: tone"],
+    ["{{@unknown}}", "Unknown builtin variable: @unknown"],
+    ["{{@date=today}}", "Builtin variable cannot have defaults or options: @date"],
+    ["{{@date|today|tomorrow}}", "Builtin variable cannot have defaults or options: @date"],
+  ])("reports malformed metadata without throwing during extraction or validation: %s", (body, message) => {
+    expect(() => extractTemplateVariables(body)).not.toThrow();
+    expect(validateTemplate({ ...baseTemplate, body })).toContainEqual({ field: "variables", message });
+    expect(() => renderTemplate(body, {})).toThrow(message);
+  });
+
+  it("uses canonical defaults and labels for every occurrence", () => {
+    const body = '{{tone?}} / {{tone "语调"=friendly}} / {{tone?}}';
+    expect(extractTemplateVariables(body)).toEqual([
+      { name: "tone", required: true, label: "语调", defaultValue: "friendly" },
+    ]);
+    expect(renderTemplate(body, {})).toBe("friendly / friendly / friendly");
+    expect(renderTemplate(body, {}, { preview: true })).toBe(renderTemplate(body, {}));
+    expect(() => renderTemplate(body, { tone: "" })).toThrow("Missing required variable: tone");
+    expect(renderTemplate(body, { tone: "" }, { preview: true })).toBe(' / {{tone "语调"=friendly}} / ');
+  });
+
+  it.each([
+    ["{{tone=a}} {{tone=b}}", "Conflicting variable default: tone"],
+    ["{{tone|a|b}} {{tone|b|a}}", "Conflicting variable options: tone"],
+    ['{{tone "A"}} {{tone "B"}}', "Conflicting variable label: tone"],
+    ["{{tone=other}} {{tone|a|b}}", "Invalid variable default: tone"],
+  ])("validates conflicting metadata: %s", (body, message) => {
+    expect(() => extractTemplateVariables(body)).not.toThrow();
+    expect(validateTemplate({ ...baseTemplate, body })).toContainEqual({ field: "variables", message });
+    expect(() => renderTemplate(body, { tone: "a" })).toThrow(message);
+  });
+
+  it("merges compatible metadata and validates supplied enum choices", () => {
+    const body = '{{tone?}} / {{tone|formal|casual|formal}} / {{tone=casual}}';
+    expect(getTemplateDefaultValues(body)).toEqual({ tone: "casual" });
+    expect(validateTemplate({ ...baseTemplate, body })).toEqual([]);
+    expect(renderTemplate(body, {})).toBe("casual / casual / casual");
+    expect(() => renderTemplate(body, { tone: "other" })).toThrow("Invalid option for variable: tone");
+    expect(renderTemplate(body, { tone: "other" }, { preview: true })).toBe(body);
+    expect(() => renderTemplate(body, { tone: " " })).toThrow("Missing required variable: tone");
+    expect(renderTemplate("{{tone?|formal|casual}}", {})).toBe("");
+    expect(renderTemplate("{{tone?|formal|casual}}", { tone: " " })).toBe(" ");
+  });
+
+  it("recognizes builtins and uses only own context values, including empty strings", () => {
+    const body = "{{@date}} {{@time}} {{@url}} {{@title}} {{@selection}}";
+    expect(extractTemplateVariables(body)).toEqual([
+      { name: "@date", required: true, builtin: true },
+      { name: "@time", required: true, builtin: true },
+      { name: "@url", required: true, builtin: true },
+      { name: "@title", required: true, builtin: true },
+      { name: "@selection", required: true, builtin: true },
+    ]);
+    expect(getTemplateDefaultValues(`${body} {{text=hello}}`)).toEqual({ text: "hello" });
+    expect(validateTemplate({ ...baseTemplate, body })).toEqual([]);
+    const context = { "@date": "2026-11-08", "@time": "12:34", "@url": "https://example.com", "@title": "", "@selection": "" };
+    expect(renderTemplate(body, { "@date": "override" }, { context })).toBe("2026-11-08 12:34 https://example.com  ");
+    expect(renderTemplate(body, {}, { context, preview: true })).toBe(renderTemplate(body, {}, { context }));
+    expect(() => renderTemplate("{{@date}}", { "@date": "override" })).toThrow("Missing builtin variable: @date");
+    expect(renderTemplate(body, {}, { preview: true })).toBe(body);
+    expect(() => renderTemplate("{{@date}}", {}, { context: Object.create(context) })).toThrow("Missing builtin variable: @date");
+  });
+
+  it("preserves advanced escaped syntax and never recursively expands defaults or context", () => {
+    const body = String.raw`\{{tone "Tone"=friendly}} \{{@date}} {{text=hello|world}} {{@selection}}`;
+    const context = { "@selection": "{{@date}}" };
+    const expected = '{{tone "Tone"=friendly}} {{@date}} hello|world {{@date}}';
+    expect(renderTemplate(body, {}, { context })).toBe(expected);
+    expect(renderTemplate(body, {}, { context, preview: true })).toBe(expected);
+    expect(validateTemplate({ ...baseTemplate, body })).toEqual([]);
+    expect(renderTemplate('{{text="{{other}}"}}', {})).toBe('"{{other}}"');
+    expect(renderTemplate("{{text=first\nsecond}}", {})).toBe("first\nsecond");
+  });
+
+  it("handles prototype-shaped variable names without mutating default maps", () => {
+    const body = "{{__proto__=safe}} {{constructor=ok}} {{toString?|a|b}}";
+    const defaults = getTemplateDefaultValues(body);
+    expect(Object.getPrototypeOf(defaults)).toBe(Object.prototype);
+    expect(Object.hasOwn(defaults, "__proto__")).toBe(true);
+    expect(defaults.__proto__).toBe("safe");
+    expect(renderTemplate(body, {})).toBe("safe ok ");
+    expect(renderTemplate(body, Object.fromEntries([["__proto__", "own"]]))).toBe("own ok ");
+  });
+
   it("extracts unique variables and preserves required flags", () => {
     expect(extractTemplateVariables("{{text}} {{ tone? }} {{text}}")).toEqual([
       { name: "text", required: true },
@@ -51,6 +202,11 @@ describe("template variables", () => {
       expect(renderTemplate(body, { x: "filled" })).toBe("filled / filled");
     },
   );
+
+  it("keeps optional occurrences empty in preview when a duplicate is required", () => {
+    expect(renderTemplate("A {{x?}} B {{x}}", {}, { preview: true })).toBe("A  B {{x}}");
+    expect(renderTemplate("{{x}} / {{x?}}", { x: " " }, { preview: true })).toBe("{{x}} /  ");
+  });
 
   it("treats escaped placeholders as literal text during extraction, validation, and rendering", () => {
     const body = String.raw`Literal \{{name}}, $\{{ github.sha }}, and \{{unfilled?}}; real {{name}}`;

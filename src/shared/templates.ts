@@ -1,3 +1,5 @@
+import { localizeDefaultSeed, resolveLocale, type UiLocale } from "./i18n";
+
 export const STORAGE_SCHEMA_VERSION = 1;
 
 export const STORAGE_KEYS = {
@@ -20,11 +22,23 @@ export type PromptTemplate = {
 export type TemplateVariable = {
   name: string;
   required: boolean;
+  defaultValue?: string;
+  options?: string[];
+  label?: string;
+  builtin?: boolean;
 };
 
 type TemplatePart =
   | { type: "text"; value: string }
-  | { type: "variable"; name: string; required: boolean; placeholder: string };
+  | ({ type: "variable"; placeholder: string } & TemplateVariable);
+
+const BUILTIN_VARIABLES = new Set(["@date", "@time", "@url", "@title", "@selection"]);
+
+type ParsedTemplate = {
+  parts: TemplatePart[];
+  variables: TemplateVariable[];
+  errors: string[];
+};
 
 export type TemplateValidationError = {
   field: keyof PromptTemplate | "variables";
@@ -91,18 +105,92 @@ const DEFAULT_TEMPLATE_SEEDS: DefaultTemplateSeed[] = [
   },
 ];
 
-export function createDefaultTemplates(now = new Date().toISOString()): PromptTemplate[] {
+export function createDefaultTemplates(
+  now = new Date().toISOString(),
+  locale: UiLocale = resolveLocale(),
+): PromptTemplate[] {
   return DEFAULT_TEMPLATE_SEEDS.map((template) => ({
-    ...template,
+    ...localizeDefaultSeed(template, locale),
     isFavorite: false,
     createdAt: now,
     updatedAt: now,
   }));
 }
 
-function parseTemplate(body: string): TemplatePart[] {
+function parseVariable(expression: string, errors: string[]): TemplateVariable | undefined {
+  let quoted = false;
+  let escaped = false;
+  let modifierIndex = -1;
+  for (let index = 0; index < expression.length; index += 1) {
+    const character = expression[index];
+    if (quoted && escaped) {
+      escaped = false;
+    } else if (quoted && character === "\\") {
+      escaped = true;
+    } else if (character === '"') {
+      quoted = !quoted;
+    } else if (!quoted && (character === "=" || character === "|")) {
+      modifierIndex = index;
+      break;
+    }
+  }
+
+  const head = (modifierIndex === -1 ? expression : expression.slice(0, modifierIndex)).trim();
+  const labelIndex = head.indexOf('"');
+  const rawName = (labelIndex === -1 ? head : head.slice(0, labelIndex)).trim();
+  const optional = rawName.endsWith("?");
+  const name = (optional ? rawName.slice(0, -1) : rawName).trim();
+  if (!name && labelIndex === -1 && modifierIndex === -1) {
+    return undefined;
+  }
+
+  const variable: TemplateVariable = { name, required: !optional };
+  if (name.startsWith("@")) {
+    variable.builtin = true;
+    if (!BUILTIN_VARIABLES.has(name)) {
+      errors.push(`Unknown builtin variable: ${name}`);
+    }
+  } else if (!/^[\p{L}\p{N}_][\p{L}\p{N}_ -]*$/u.test(name)) {
+    errors.push(`Invalid variable name: ${name}`);
+  }
+
+  if (labelIndex !== -1) {
+    try {
+      const label: unknown = JSON.parse(head.slice(labelIndex));
+      if (typeof label !== "string") {
+        throw new Error("Invalid label");
+      }
+      variable.label = label;
+    } catch {
+      errors.push(`Invalid variable label: ${name}`);
+    }
+  }
+
+  if (modifierIndex !== -1) {
+    const modifier = expression[modifierIndex];
+    const value = expression.slice(modifierIndex + 1);
+    if (variable.builtin) {
+      errors.push(`Builtin variable cannot have defaults or options: ${name}`);
+    } else if (modifier === "=") {
+      variable.defaultValue = value;
+    } else {
+      const choices = value.split("|").map((choice) => choice.trim());
+      if (choices.some((choice) => choice.length === 0)) {
+        errors.push(`Invalid variable options: ${name}`);
+      }
+      variable.options = [...new Set(choices.filter(Boolean))];
+    }
+  }
+
+  return variable;
+}
+
+function parseTemplate(body: string): ParsedTemplate {
   const parts: TemplatePart[] = [];
-  const placeholderPattern = /\\{{|{{([^{}]*)}}/g;
+  const variables = new Map<string, TemplateVariable>();
+  const errors: string[] = [];
+  // The fallback also captures malformed quoted labels so validation can explain them.
+  const placeholderPattern = /\\{{|{{((?:"(?:\\.|[^"\\])*"|[^{}"])*)}}|{{([^{}]*)}}/g;
   let position = 0;
   let match: RegExpExecArray | null;
 
@@ -133,57 +221,97 @@ function parseTemplate(body: string): TemplatePart[] {
 
     position = placeholderPattern.lastIndex;
     const placeholder = match[0];
-    const rawName = match[1]?.trim() ?? "";
-    const isOptional = rawName.endsWith("?");
-    const name = (isOptional ? rawName.slice(0, -1) : rawName).trim();
+    const variable = parseVariable((match[1] ?? match[2] ?? "").trim(), errors);
 
-    if (name.length === 0) {
+    if (!variable) {
       parts.push({ type: "text", value: placeholder });
     } else {
-      parts.push({ type: "variable", name, required: !isOptional, placeholder });
+      const existing = variables.get(variable.name);
+      if (existing) {
+        existing.required ||= variable.required;
+        for (const key of ["defaultValue", "options", "label"] as const) {
+          if (variable[key] === undefined) {
+            continue;
+          }
+          if (existing[key] !== undefined && JSON.stringify(existing[key]) !== JSON.stringify(variable[key])) {
+            const kind = key === "defaultValue" ? "default" : key;
+            errors.push(`Conflicting variable ${kind}: ${variable.name}`);
+          } else {
+            Object.assign(existing, { [key]: variable[key] });
+          }
+        }
+      } else {
+        variables.set(variable.name, { ...variable });
+      }
+      parts.push({ type: "variable", ...variable, placeholder });
     }
   }
 
   parts.push({ type: "text", value: body.slice(position) });
-  return parts;
+  for (const variable of variables.values()) {
+    if (variable.defaultValue !== undefined && variable.options &&
+        variable.defaultValue.trim() !== "" && !variable.options.includes(variable.defaultValue)) {
+      errors.push(`Invalid variable default: ${variable.name}`);
+    }
+  }
+  return { parts, variables: [...variables.values()], errors: [...new Set(errors)] };
 }
 
 export function extractTemplateVariables(body: string): TemplateVariable[] {
-  const variables = new Map<string, TemplateVariable>();
+  return parseTemplate(body).variables;
+}
 
-  for (const part of parseTemplate(body)) {
-    if (part.type === "text") {
-      continue;
-    }
+function variableDefault(variable: TemplateVariable): string {
+  return variable.defaultValue ?? (variable.required ? variable.options?.[0] : undefined) ?? "";
+}
 
-    variables.set(part.name, {
-      name: part.name,
-      required: part.required || (variables.get(part.name)?.required ?? false),
-    });
-  }
-
-  return [...variables.values()];
+export function getTemplateDefaultValues(body: string): Record<string, string> {
+  return Object.fromEntries(parseTemplate(body).variables
+    .filter((variable) => !variable.builtin)
+    .map((variable) => [variable.name, variableDefault(variable)]));
 }
 
 export function renderTemplate(
   body: string,
   values: Record<string, string>,
-  options: { preview?: boolean } = {},
+  options: { preview?: boolean; context?: Record<string, string> } = {},
 ): string {
-  return parseTemplate(body).map((part) => {
+  const parsed = parseTemplate(body);
+  if (parsed.errors.length > 0 && !options.preview) {
+    throw new Error(parsed.errors[0]);
+  }
+  const variables = new Map(parsed.variables.map((variable) => [variable.name, variable]));
+  return parsed.parts.map((part) => {
     if (part.type === "text") {
       return part.value;
     }
 
-    const value = Object.prototype.hasOwnProperty.call(values, part.name)
-      ? values[part.name] ?? ""
-      : "";
-
-    if (part.required && value.trim().length === 0) {
+    const variable = variables.get(part.name)!;
+    if (variable.builtin) {
+      if (BUILTIN_VARIABLES.has(part.name) && Object.prototype.hasOwnProperty.call(options.context ?? {}, part.name)) {
+        return options.context![part.name] ?? "";
+      }
       if (options.preview) {
         return part.placeholder;
       }
+      throw new Error(`Missing builtin variable: ${part.name}`);
+    }
+    const value = Object.prototype.hasOwnProperty.call(values, part.name)
+      ? values[part.name] ?? ""
+      : variableDefault(variable);
+
+    if (variable.required && value.trim().length === 0) {
+      if (options.preview) {
+        return part.required ? part.placeholder : value;
+      }
       throw new Error(`Missing required variable: ${part.name}`);
+    }
+
+    if (value.trim().length > 0 && variable.options && !variable.options.includes(value)) {
+      if (options.preview) {
+        return part.placeholder;
+      }
+      throw new Error(`Invalid option for variable: ${part.name}`);
     }
 
     return value;
@@ -212,16 +340,10 @@ export function validateTemplate(template: PromptTemplate): TemplateValidationEr
     errors.push({ field: "body", message: "Body is required." });
   }
 
-  const invalidVariable = extractTemplateVariables(template.body).find(
-    (variable) => !/^[\p{L}\p{N}_][\p{L}\p{N}_ -]*$/u.test(variable.name),
-  );
-
-  if (invalidVariable) {
-    errors.push({
-      field: "variables",
-      message: `Invalid variable name: ${invalidVariable.name}`,
-    });
-  }
+  errors.push(...parseTemplate(template.body).errors.map((message) => ({
+    field: "variables" as const,
+    message,
+  })));
 
   return errors;
 }

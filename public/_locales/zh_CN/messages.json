@@ -1,0 +1,618 @@
+{
+  "ui_catalog_locale": {
+    "message": "zh_CN"
+  },
+  "example_title": {
+    "message": "改写得更清晰"
+  },
+  "extension_name": {
+    "message": "PromptCrate"
+  },
+  "extension_description": {
+    "message": "在网页输入框中插入本地提示词片段。无需账号，无需云端。"
+  },
+  "open_prompt_menu": {
+    "message": "打开 PromptCrate"
+  },
+  "close": {
+    "message": "关闭"
+  },
+  "search_templates": {
+    "message": "搜索模板"
+  },
+  "templates": {
+    "message": "模板"
+  },
+  "no_matches": {
+    "message": "没有匹配的模板。"
+  },
+  "matches_limit": {
+    "message": "显示 $VALUE2$ 个匹配结果中的前 $VALUE1$ 个。请缩小搜索范围。",
+    "placeholders": {
+      "value2": {
+        "content": "$2"
+      },
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "favorite": {
+    "message": "收藏"
+  },
+  "optional": {
+    "message": "（选填）"
+  },
+  "multiline_hint": {
+    "message": "按 Enter 换行，按 Ctrl/⌘+Enter 插入。"
+  },
+  "back": {
+    "message": "返回"
+  },
+  "insert": {
+    "message": "插入"
+  },
+  "fill_variable": {
+    "message": "请先填写 $VALUE1$，再插入。",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "focus_field": {
+    "message": "请先聚焦文本输入框，再打开 PromptCrate。不支持只读或已禁用的输入框。"
+  },
+  "load_templates_retry": {
+    "message": "无法加载模板。请关闭 PromptCrate 后重试。$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "insert_failed": {
+    "message": "PromptCrate 无法在此输入框中插入内容。"
+  },
+  "missing_required_variable": {
+    "message": "缺少必填变量：$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "invalid_variable_name": {
+    "message": "变量名无效：$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "loading_templates": {
+    "message": "正在加载模板……"
+  },
+  "templates_loaded": {
+    "message": "已加载 $VALUE1$ 个模板。",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "load_templates_failed": {
+    "message": "无法加载模板。"
+  },
+  "new_template_status": {
+    "message": "新建模板。"
+  },
+  "new_template": {
+    "message": "新建模板"
+  },
+  "edit_template": {
+    "message": "编辑模板"
+  },
+  "new": {
+    "message": "新建"
+  },
+  "selection_missing": {
+    "message": "所选模板已不存在。请选择其他模板或新建模板。"
+  },
+  "saved_template": {
+    "message": "已保存“$VALUE1$”。",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "deleted_template": {
+    "message": "已删除“$VALUE1$”。",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "copied_template": {
+    "message": "已复制“$VALUE1$”。",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "confirm_delete": {
+    "message": "删除“$VALUE1$”？",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "confirm_overwrite": {
+    "message": "覆盖所有现有模板？"
+  },
+  "duplicate_template_id": {
+    "message": "模板 ID 已存在。"
+  },
+  "exported_templates": {
+    "message": "已导出 $VALUE1$ 个模板。",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "import_failed": {
+    "message": "导入失败。"
+  },
+  "import_ready": {
+    "message": "$VALUE1$ 个模板已准备好导入。",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "imported_overwrite": {
+    "message": "已覆盖导入 $VALUE1$ 个模板。",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "imported_merge": {
+    "message": "已导入 $VALUE1$ 个新模板并更新 $VALUE2$ 个模板。",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      },
+      "value2": {
+        "content": "$2"
+      }
+    }
+  },
+  "save_failed": {
+    "message": "保存失败。"
+  },
+  "draft_changed": {
+    "message": "模板已在其他标签页中更改。草稿已保留，请重新选择模板以加载最新版本后再保存。"
+  },
+  "draft_deleted": {
+    "message": "模板已在其他标签页中删除。草稿已保留，请使用“保留为新模板”保存副本。"
+  },
+  "draft_kept": {
+    "message": "草稿已保留为新模板。点击“保存”以创建。"
+  },
+  "keep_as_new": {
+    "message": "保留为新模板"
+  },
+  "copy": {
+    "message": "复制"
+  },
+  "delete": {
+    "message": "删除"
+  },
+  "save": {
+    "message": "保存"
+  },
+  "no_templates": {
+    "message": "暂无模板。"
+  },
+  "import_export": {
+    "message": "导入和导出"
+  },
+  "export_json": {
+    "message": "导出 JSON"
+  },
+  "import_json": {
+    "message": "导入 JSON"
+  },
+  "merge": {
+    "message": "合并"
+  },
+  "overwrite": {
+    "message": "覆盖"
+  },
+  "template_editor": {
+    "message": "模板编辑器"
+  },
+  "id": {
+    "message": "ID"
+  },
+  "title": {
+    "message": "标题"
+  },
+  "tags": {
+    "message": "标签"
+  },
+  "body": {
+    "message": "正文"
+  },
+  "preferences": {
+    "message": "偏好设置"
+  },
+  "theme": {
+    "message": "主题"
+  },
+  "system": {
+    "message": "跟随系统"
+  },
+  "light": {
+    "message": "浅色"
+  },
+  "dark": {
+    "message": "深色"
+  },
+  "loading_shortcut": {
+    "message": "正在读取快捷键……"
+  },
+  "shortcut_unavailable": {
+    "message": "无法读取快捷键。请使用工具栏按钮或设置快捷键。"
+  },
+  "shortcut": {
+    "message": "快捷键：$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "shortcut_unassigned": {
+    "message": "尚未设置快捷键。请使用工具栏按钮或设置快捷键。"
+  },
+  "configure_shortcut": {
+    "message": "设置快捷键"
+  },
+  "load_theme_failed": {
+    "message": "无法加载主题。$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "read_shortcut_failed": {
+    "message": "无法读取快捷键。$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "save_theme_failed": {
+    "message": "无法保存主题。$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "open_shortcut_failed": {
+    "message": "无法打开快捷键设置。$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "invalid_mutation": {
+    "message": "模板修改请求无效。"
+  },
+  "save_conflict": {
+    "message": "模板已在其他标签页中更改或删除。请重新选择后再保存。"
+  },
+  "delete_conflict": {
+    "message": "模板已在其他标签页中更改或删除。请重新选择后再删除。"
+  },
+  "import_conflict": {
+    "message": "模板已在其他标签页中更改。请重新加载最新模板后再导入。"
+  },
+  "invalid_storage_response": {
+    "message": "模板存储返回了无效响应。"
+  },
+  "invalid_template_index": {
+    "message": "第 $VALUE1$ 个模板无效。",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "duplicate_id": {
+    "message": "模板 ID 重复：$VALUE1$。",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "invalid_json": {
+    "message": "所选文件不是有效的 JSON。"
+  },
+  "import_object": {
+    "message": "导入文件必须包含一个对象。"
+  },
+  "unsupported_schema": {
+    "message": "不支持的 schemaVersion：$VALUE1$。",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "import_array": {
+    "message": "导入文件必须包含 templates 数组。"
+  },
+  "import_duplicate": {
+    "message": "导入文件包含重复的模板 ID：$VALUE1$。",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "id_required": {
+    "message": "请填写 ID。"
+  },
+  "id_characters": {
+    "message": "ID 只能包含字母、数字、连字符、下划线和点。"
+  },
+  "title_required": {
+    "message": "请填写标题。"
+  },
+  "body_required": {
+    "message": "请填写正文。"
+  },
+  "invalid_template_id": {
+    "message": "模板 ID 无效。"
+  },
+  "activation_unavailable": {
+    "message": "无法在此打开 PromptCrate。请尝试普通网页或重新加载页面。"
+  },
+  "activation_unreachable": {
+    "message": "PromptCrate 无法连接到此页面。请重新加载后再试。"
+  },
+  "language": {
+    "message": "语言"
+  },
+  "english": {
+    "message": "English"
+  },
+  "chinese": {
+    "message": "简体中文"
+  },
+  "remember_variables": {
+    "message": "记住变量值"
+  },
+  "remember_variables_help": {
+    "message": "启用后，变量值仅保存在此设备上。关闭此功能会清除已记住的值。"
+  },
+  "clear_remembered": {
+    "message": "清除已记住的值"
+  },
+  "remembered_cleared": {
+    "message": "已清除记住的变量值。"
+  },
+  "variable_memory_failed": {
+    "message": "无法更新变量记忆设置。$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "automatic": {
+    "message": "自动"
+  },
+  "variable_default": {
+    "message": "默认值：$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "invalid_option": {
+    "message": "请为 $VALUE1$ 选择有效选项。",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "missing_builtin": {
+    "message": "缺少内置变量：$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "load_language_failed": {
+    "message": "无法加载语言设置。$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "save_language_failed": {
+    "message": "无法保存语言设置。$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "invalid_language": {
+    "message": "语言设置无效。"
+  },
+  "invalid_theme": {
+    "message": "主题设置无效。"
+  },
+  "example_rewrite": {
+    "message": "请用更清晰的语气改写 {{text}}。"
+  },
+  "example_tags": {
+    "message": "写作, 改写"
+  },
+  "unknown_builtin": {
+    "message": "未知的内置变量：$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "invalid_variable_label": {
+    "message": "变量标签无效：$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "builtin_options": {
+    "message": "内置变量不能设置默认值或选项：$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "invalid_variable_options": {
+    "message": "变量选项无效：$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "conflicting_variable_default": {
+    "message": "变量默认值冲突：$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "conflicting_variable_options": {
+    "message": "变量选项冲突：$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "conflicting_variable_label": {
+    "message": "变量标签冲突：$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "invalid_variable_default": {
+    "message": "变量默认值无效：$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "invalid_variable_option": {
+    "message": "变量选项无效：$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "default_summarize_page_title": {
+    "message": "总结页面"
+  },
+  "default_summarize_page_body": {
+    "message": "请用简洁的要点总结此页面的核心内容。"
+  },
+  "default_summarize_page_tags": {
+    "message": "总结,阅读"
+  },
+  "default_rewrite_clearer_title": {
+    "message": "改写得更清晰"
+  },
+  "default_rewrite_clearer_body": {
+    "message": "请改写以下文本，使其更清晰、简洁，并保留原意：\n\n{{text \"待改写文本\"}}"
+  },
+  "default_rewrite_clearer_tags": {
+    "message": "写作,改写"
+  },
+  "default_compare_options_title": {
+    "message": "比较方案"
+  },
+  "default_compare_options_body": {
+    "message": "请比较 {{option_a \"方案 A\"}} 和 {{option_b \"方案 B\"}}，说明各自的利弊和风险，并给出建议。"
+  },
+  "default_compare_options_tags": {
+    "message": "分析,决策"
+  },
+  "default_draft_reply_title": {
+    "message": "起草回复"
+  },
+  "default_draft_reply_body": {
+    "message": "请为以下消息起草一份友善、简洁的回复。语气：{{tone \"语气\"}}。\n\n{{message \"消息内容\"}}"
+  },
+  "default_draft_reply_tags": {
+    "message": "邮件,写作"
+  },
+  "default_extract_actions_title": {
+    "message": "提取待办事项"
+  },
+  "default_extract_actions_body": {
+    "message": "请从以下文本中提取待办事项、负责人和截止日期：\n\n{{notes \"会议记录\"}}"
+  },
+  "default_extract_actions_tags": {
+    "message": "会议,任务"
+  },
+  "default_debug_helper_title": {
+    "message": "排查错误"
+  },
+  "default_debug_helper_body": {
+    "message": "请根据以下错误及上下文分析可能的根本原因，并列出接下来应进行的三项检查：\n\n{{error \"错误及上下文\"}}"
+  },
+  "default_debug_helper_tags": {
+    "message": "编程,调试"
+  },
+  "default_translate_polish_title": {
+    "message": "翻译并润色"
+  },
+  "default_translate_polish_body": {
+    "message": "请将以下文本翻译为 {{language \"目标语言\"}}，并润色为自然、专业的表达：\n\n{{text \"待翻译文本\"}}"
+  },
+  "default_translate_polish_tags": {
+    "message": "翻译,写作"
+  }
+}

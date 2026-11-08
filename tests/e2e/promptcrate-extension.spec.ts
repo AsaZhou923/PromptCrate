@@ -1642,9 +1642,10 @@ async function delayNextContentRead(
   page: Page,
   app: { context: BrowserContext },
   mode: "delay" | "fail" = "delay",
+  messageType = "READ_TEMPLATES",
 ): Promise<void> {
   const worker = app.context.serviceWorkers()[0] ?? await app.context.waitForEvent("serviceworker");
-  await worker.evaluate(async ({ url, readMode }) => {
+  await worker.evaluate(async ({ url, readMode, readMessageType }) => {
     const tab = (await chrome.tabs.query({})).find((item) => item.url === url);
     if (typeof tab?.id !== "number") {
       throw new Error("Fixture tab not found.");
@@ -1652,11 +1653,11 @@ async function delayNextContentRead(
     // Install the gate in the content script's isolated world, not the page world.
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: (readMode: "delay" | "fail") => {
+      func: (readMode: "delay" | "fail", readMessageType: string) => {
         const originalSend = chrome.runtime.sendMessage.bind(chrome.runtime);
         if (readMode === "fail") {
           chrome.runtime.sendMessage = ((message: { type?: string }) => {
-            if (message.type !== "READ_TEMPLATES") {
+            if (message.type !== readMessageType) {
               return originalSend(message);
             }
             chrome.runtime.sendMessage = originalSend;
@@ -1669,7 +1670,7 @@ async function delayNextContentRead(
         document.documentElement.removeAttribute("data-promptcrate-read-blocked");
         document.documentElement.setAttribute("data-promptcrate-read-count", "0");
         chrome.runtime.sendMessage = (async (message: { type?: string }) => {
-          if (message.type !== "READ_TEMPLATES") {
+          if (message.type !== readMessageType) {
             return originalSend(message);
           }
           readCount += 1;
@@ -1690,9 +1691,9 @@ async function delayNextContentRead(
           return result;
         }) as typeof chrome.runtime.sendMessage;
       },
-      args: [readMode],
+      args: [readMode, readMessageType],
     });
-  }, { url: page.url(), readMode: mode });
+  }, { url: page.url(), readMode: mode, readMessageType: messageType });
 }
 
 test("real web smoke covers at least three public input surfaces @real", async (
@@ -2024,6 +2025,209 @@ test("duplicate variable requirements and optional preview match the inserted te
   }
 });
 
+test("advanced variables prefill defaults, offer enumerations, and preserve literal input", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-advanced-variables"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    await options.evaluate((record) => chrome.storage.local.set({ "promptCrate.templates": [record] }),
+      createTemplate("advanced", "Advanced variables", '{{text "待改写文本"=Hello}} / {{tone|formal|casual|friendly}} / {{note?|short|long}}', []));
+    const page = await app.context.newPage();
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    const target = page.locator("#textarea");
+    await target.focus();
+    await openPromptMenu(page, page, app);
+    await chooseTemplateFromMenu(page, "Advanced variables");
+    const menu = menuPanel(page);
+    await expect(menu.getByLabel("待改写文本", { exact: true })).toHaveValue("Hello");
+    const tone = menu.getByRole("combobox", { name: "tone", exact: true });
+    await expect(tone).toHaveValue("formal");
+    await expect(tone.locator("option")).toHaveText(["formal", "casual", "friendly"]);
+    await expect(menu.getByRole("combobox", { name: "note (optional)", exact: true })).toHaveValue("");
+    await expect(menu.locator(".preview")).toHaveText("Hello / formal / ", { useInnerText: false });
+    await menu.getByLabel("待改写文本", { exact: true }).fill("{{tone}}\nSecond line");
+    await tone.selectOption("casual");
+    const expected = "{{tone}}\nSecond line / casual / ";
+    await expect(menu.locator(".preview")).toHaveText(expected, { useInnerText: false });
+    await clickMenuButton(page, "Insert");
+    await waitForMenuClosed(page);
+    await expect(target).toHaveValue(expected);
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("builtin variables snapshot the active page and saved selection without another form", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-builtin-variables"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    await options.evaluate((record) => chrome.storage.local.set({ "promptCrate.templates": [record] }),
+      createTemplate("builtin", "Builtin snapshot", "{{@date}}|{{@time}}|{{@url}}|{{@title}}|{{@selection}}", []));
+    const page = await app.context.newPage();
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html?builtin=1`);
+    await page.evaluate(() => { document.title = "Chosen page title"; });
+    const target = page.locator("#textarea");
+    await target.fill("before {{tone}} after");
+    await target.evaluate((element: HTMLTextAreaElement) => {
+      element.focus();
+      element.setSelectionRange(7, 15);
+    });
+    await openPromptMenu(page, page, app);
+    await chooseTemplateFromMenu(page, "Builtin snapshot");
+    await waitForMenuClosed(page);
+    const value = await target.inputValue();
+    const prefix = value.match(/^before (\d{4}-\d{2}-\d{2})\|(\d{2}:\d{2})\|/);
+    expect(prefix).not.toBeNull();
+    expect(value.slice(prefix![0].length)).toBe(`${page.url()}|Chosen page title|{{tone}} after`);
+    await expect(menuPanel(page).locator(".variable-form")).toHaveCount(0);
+    const memory = await options.evaluate(() => chrome.storage.local.get("promptCrate.variableValues"));
+    expect(memory["promptCrate.variableValues"] ?? {}).toEqual({});
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("variable memory requires opt-in and clears cached values on clear and opt-out", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-variable-memory"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    await options.evaluate((record) => chrome.storage.local.set({ "promptCrate.templates": [record] }),
+      createTemplate("remember", "Remember language", "Translate to {{language=English}}", []));
+    const preference = options.getByRole("checkbox", { name: "Remember variable values", exact: true });
+    await expect(preference).not.toBeChecked();
+    const page = await app.context.newPage();
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    const target = page.locator("#textarea");
+    const openForm = async () => {
+      await target.fill("");
+      await target.focus();
+      await openPromptMenu(page, page, app);
+      await chooseTemplateFromMenu(page, "Remember language");
+      return menuPanel(page).getByLabel("language", { exact: true });
+    };
+    const insert = async (value: string) => {
+      await menuPanel(page).getByLabel("language", { exact: true }).fill(value);
+      await clickMenuButton(page, "Insert");
+      await waitForMenuClosed(page);
+      await expect(target).toHaveValue(`Translate to ${value}`);
+    };
+    await expect(await openForm()).toHaveValue("English");
+    await insert("French");
+    await expect(await openForm()).toHaveValue("English");
+    await clickMenuButton(page, "Close");
+    // The controlled preference reflects the acknowledged asynchronous storage operation.
+    await preference.click();
+    await expect(preference).toBeChecked();
+    await expect(preference).toBeEnabled();
+    await openForm();
+    await insert("Japanese");
+    await expect(await openForm()).toHaveValue("Japanese");
+    await clickMenuButton(page, "Close");
+    await options.getByRole("button", { name: "Clear remembered values", exact: true }).click();
+    await expect(preference).toBeEnabled();
+    await expect(preference).toBeChecked();
+    await expect(await openForm()).toHaveValue("English");
+    await insert("Chinese");
+    await expect(await openForm()).toHaveValue("Chinese");
+    await clickMenuButton(page, "Close");
+    await preference.click();
+    await expect(preference).not.toBeChecked();
+    await expect(preference).toBeEnabled();
+    await expect(await openForm()).toHaveValue("English");
+    const memory = await options.evaluate(() => chrome.storage.local.get("promptCrate.variableValues"));
+    expect(memory["promptCrate.variableValues"]).toEqual({});
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("language switching translates open drafts and initializes only new libraries in Chinese", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-language-switch"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    const original = createTemplate("custom", "My own English title", "Rewrite {{text}}", ["mine"]);
+    await options.evaluate((record) => chrome.storage.local.set({ "promptCrate.templates": [record] }), original);
+    const page = await app.context.newPage();
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    await page.locator("#textarea").focus();
+    await openPromptMenu(page, page, app);
+    await chooseTemplateFromMenu(page, original.title);
+    const menu = menuPanel(page);
+    await menu.getByLabel("text", { exact: true }).fill("Keep my unfinished draft");
+    await options.getByRole("combobox", { name: "Language", exact: true }).selectOption("zh_CN");
+    await expect(options.getByRole("combobox", { name: "语言", exact: true })).toHaveValue("zh_CN");
+    await expect(menu.getByRole("button", { name: "插入", exact: true })).toBeVisible();
+    await expect(menu.getByLabel("text", { exact: true })).toHaveValue("Keep my unfinished draft");
+    const menuScreenshot = testInfo.outputPath("chinese-variable-form.png");
+    await menu.screenshot({ path: menuScreenshot });
+    await testInfo.attach("chinese-variable-form", { path: menuScreenshot, contentType: "image/png" });
+    const optionsScreenshot = testInfo.outputPath("chinese-options.png");
+    await options.screenshot({ path: optionsScreenshot, fullPage: true });
+    await testInfo.attach("chinese-options", { path: optionsScreenshot, contentType: "image/png" });
+    expect(await readTemplates(options)).toEqual([original]);
+    await menu.getByLabel("text", { exact: true }).fill("   ");
+    await clickMenuButton(page, "插入");
+    await expect(menu.getByRole("alert")).toHaveText("请先填写 text，再插入。");
+    await clickMenuButton(page, "返回");
+    await menu.locator("input.search").fill("not-a-template");
+    await expect(menu.getByRole("status")).toHaveText("没有匹配的模板。");
+    await clickMenuButton(page, "关闭");
+    // Test-only reset preserves the selected language, like a fresh library initialization.
+    await options.evaluate(() => chrome.storage.local.remove(["promptCrate.templates", "promptCrate.schemaVersion"]));
+    await options.reload();
+    await expect(options.locator(".template-row")).toHaveCount(7);
+    const localized = await readTemplates(options);
+    expect(localized.some((record) => record.title === "改写得更清晰")).toBe(true);
+    expect(localized.some((record) => record.title === "Rewrite clearer")).toBe(false);
+    await expect(options.getByRole("combobox", { name: "语言", exact: true })).toHaveValue("zh_CN");
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("delayed variable memory cannot overwrite a draft exposed by language switching", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-memory-language-race"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    const template = createTemplate("late-memory", "Delayed memory", "{{text=Default text}}", []);
+    await options.evaluate(async (record) => {
+      await chrome.storage.local.set({ "promptCrate.templates": [record] });
+      await chrome.runtime.sendMessage({ type: "SET_VARIABLE_MEMORY", enabled: true });
+      await chrome.runtime.sendMessage({ type: "REMEMBER_VARIABLE_VALUES", templateId: record.id,
+        createdAt: record.createdAt, values: { text: "Old remembered value" } });
+    }, template);
+    const page = await app.context.newPage();
+    await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
+    await page.locator("#textarea").focus();
+    await openPromptMenu(page, page, app);
+    await delayNextContentRead(page, app, "delay", "READ_VARIABLE_MEMORY");
+    await chooseTemplateFromMenu(page, template.title);
+    await expect(page.locator("html")).toHaveAttribute("data-promptcrate-read-blocked", "true");
+    await options.getByRole("combobox", { name: "Language", exact: true }).selectOption("zh_CN");
+    const field = menuPanel(page).getByLabel("text", { exact: true });
+    await expect(field).toHaveValue("Default text");
+    await field.fill("My new draft");
+    await expect(field).toBeFocused();
+    await page.evaluate(() => window.dispatchEvent(new Event("promptcrate:test-release-read")));
+    await expect(page.locator("html")).not.toHaveAttribute("data-promptcrate-read-blocked", "true");
+    await expect(field).toHaveValue("My new draft");
+    await expect(field).toBeFocused();
+    await expect(menuPanel(page).locator(".preview")).toHaveText("My new draft");
+    await clickMenuButton(page, "插入");
+    await waitForMenuClosed(page);
+    await expect.poll(async () => options.evaluate(async (record) => {
+      const memory = await chrome.runtime.sendMessage({ type: "READ_VARIABLE_MEMORY", templateId: record.id, createdAt: record.createdAt });
+      return memory.values;
+    }, template)).toEqual({ text: "My new draft" });
+  } finally {
+    await app.context.close();
+  }
+});
+
 const realWebScenarios: Array<{
   name: string;
   url: string;
@@ -2118,7 +2322,15 @@ async function resetExtensionStorage(
 ): Promise<Page> {
   const options = await context.newPage();
   await options.goto(`chrome-extension://${extensionId}/options.html`);
-  await options.evaluate(() => chrome.storage.local.clear());
+  await options.evaluate(async () => {
+    await chrome.storage.local.clear();
+    // Make the English fixture baseline independent of the host browser's UI language.
+    await chrome.storage.local.set({ "promptCrate.language": "en" });
+    // Drain any initialization triggered by clear before resetting the localized seed.
+    await chrome.runtime.sendMessage({ type: "READ_TEMPLATES" });
+    await chrome.storage.local.remove(["promptCrate.templates", "promptCrate.schemaVersion"]);
+    await chrome.runtime.sendMessage({ type: "READ_TEMPLATES" });
+  });
   await options.reload();
   await expect(options.locator(".status")).toContainText("templates loaded.");
   return options;

@@ -1,5 +1,9 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { localizeText, observeLanguage, setLanguagePreference, tr, type LanguagePreference } from "../shared/i18n";
+import {
+  clearVariableMemory, loadVariableMemory, MEMORY_ENABLED_KEY, setVariableMemoryEnabled,
+} from "../shared/variable-memory";
 import {
   createTemplateExportPayload,
   parseTemplateImportJson,
@@ -54,12 +58,46 @@ function OptionsApp() {
   const refreshRef = useRef<() => Promise<void>>(async () => {});
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("Loading templates...");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | string[] | null>(null);
   const [pendingImport, setPendingImport] = useState<TemplateExportPayload | null>(null);
   const [theme, setTheme] = useState<ThemePreference>("system");
   const [themeSaving, setThemeSaving] = useState(false);
   const [shortcut, setShortcut] = useState<string | null | undefined>(undefined);
   const [preferencesError, setPreferencesError] = useState<string | null>(null);
+  const [language, setLanguage] = useState<LanguagePreference>("system");
+  const [languageSaving, setLanguageSaving] = useState(false);
+  const [rememberVariables, setRememberVariables] = useState(false);
+  const [memorySaving, setMemorySaving] = useState(true);
+  const [, setLocaleRevision] = useState(0);
+
+  useEffect(() => observeLanguage((preference, locale) => {
+    document.documentElement.lang = locale === "zh_CN" ? "zh-CN" : "en";
+    setLanguage(preference);
+    // A system preference can resolve differently without changing its stored value.
+    setLocaleRevision((revision) => revision + 1);
+  }), []);
+
+  useEffect(() => {
+    let mounted = true;
+    let preferenceChanged = false;
+    const onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area !== "local" || !(MEMORY_ENABLED_KEY in changes)) return;
+      preferenceChanged = true;
+      setRememberVariables(changes[MEMORY_ENABLED_KEY].newValue === true);
+    };
+    chrome.storage.onChanged.addListener(onChanged);
+    void loadVariableMemory().then((value) => {
+      if (mounted && !preferenceChanged) setRememberVariables(value.enabled);
+    }).catch((error: unknown) => {
+      if (mounted) setPreferencesError(`Could not update variable memory. ${getErrorMessage(error)}`);
+    }).finally(() => {
+      if (mounted) setMemorySaving(false);
+    });
+    return () => {
+      mounted = false;
+      chrome.storage.onChanged.removeListener(onChanged);
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -188,6 +226,34 @@ function OptionsApp() {
     }
   }
 
+  async function changeLanguage(value: LanguagePreference): Promise<void> {
+    setLanguageSaving(true);
+    setPreferencesError(null);
+    try {
+      await setLanguagePreference(value);
+      setLanguage(value);
+    } catch (error) {
+      setPreferencesError(`Could not save language. ${getErrorMessage(error)}`);
+    } finally {
+      setLanguageSaving(false);
+    }
+  }
+
+  async function updateVariableMemory(enabled?: boolean): Promise<void> {
+    setMemorySaving(true);
+    setPreferencesError(null);
+    try {
+      const next = enabled === undefined
+        ? await clearVariableMemory() : await setVariableMemoryEnabled(enabled);
+      setRememberVariables(next.enabled);
+      if (enabled === undefined) setStatus("Remembered values cleared.");
+    } catch (error) {
+      setPreferencesError(`Could not update variable memory. ${getErrorMessage(error)}`);
+    } finally {
+      setMemorySaving(false);
+    }
+  }
+
   async function configureShortcut(): Promise<void> {
     setPreferencesError(null);
     try {
@@ -221,7 +287,7 @@ function OptionsApp() {
     const validationErrors = validateTemplate(candidate);
 
     if (validationErrors.length > 0) {
-      setError(validationErrors.map((item) => item.message).join(" "));
+      setError(validationErrors.map((item) => item.message));
       return;
     }
 
@@ -248,7 +314,7 @@ function OptionsApp() {
       return;
     }
 
-    if (!confirm(`Delete "${selectedTemplate.title}"?`)) {
+    if (!confirm(tr('Delete "$1"?', selectedTemplate.title))) {
       return;
     }
 
@@ -321,7 +387,7 @@ function OptionsApp() {
       return;
     }
 
-    if (mode === "overwrite" && !confirm("Overwrite all existing templates?")) {
+    if (mode === "overwrite" && !confirm(tr("Overwrite all existing templates?"))) {
       return;
     }
 
@@ -369,43 +435,58 @@ function OptionsApp() {
     <main className="options-shell">
       <style>{OPTIONS_STYLES}</style>
 
-      <aside className="sidebar" aria-label="Templates">
+      <aside className="sidebar" aria-label={tr("Templates")}>
         <div className="toolbar">
           <h1>PromptCrate</h1>
           <button type="button" disabled={saving} onClick={startNewTemplate}>
-            New
+            {tr("New")}
           </button>
         </div>
 
-        <section className="preferences" aria-label="Preferences">
+        <section className="preferences" aria-label={tr("Preferences")}>
           <label>
-            <span>Theme</span>
+            <span>{tr("Language")}</span>
+            <select value={language} disabled={languageSaving} onChange={(event) => void changeLanguage(event.target.value as LanguagePreference)}>
+              <option value="system">{tr("System")}</option>
+              <option value="en">English</option>
+              <option value="zh_CN">简体中文</option>
+            </select>
+          </label>
+          <label>
+            <span>{tr("Theme")}</span>
             <select value={theme} disabled={themeSaving} onChange={(event) => void changeTheme(event.target.value as ThemePreference)}>
-              <option value="system">System</option>
-              <option value="light">Light</option>
-              <option value="dark">Dark</option>
+              <option value="system">{tr("System")}</option>
+              <option value="light">{tr("Light")}</option>
+              <option value="dark">{tr("Dark")}</option>
             </select>
           </label>
           <p className="muted">
-            {shortcut === undefined ? "Loading shortcut..." : shortcut === null
-              ? "Shortcut unavailable. Use the toolbar button or configure a shortcut." : shortcut
-              ? `Shortcut: ${shortcut}` : "Shortcut not assigned. Use the toolbar button or configure a shortcut."}
+            {shortcut === undefined ? tr("Loading shortcut...") : shortcut === null
+              ? tr("Shortcut unavailable. Use the toolbar button or configure a shortcut.") : shortcut
+              ? tr("Shortcut: $1", shortcut) : tr("Shortcut not assigned. Use the toolbar button or configure a shortcut.")}
           </p>
-          <button type="button" onClick={() => void configureShortcut()}>Configure shortcut</button>
-          {preferencesError ? <p className="preference-error" role="status">{preferencesError}</p> : null}
+          <button type="button" onClick={() => void configureShortcut()}>{tr("Configure shortcut")}</button>
+          <label className="favorite-check">
+            <input type="checkbox" checked={rememberVariables} disabled={memorySaving}
+              onChange={(event) => void updateVariableMemory(event.target.checked)} />
+            <span>{tr("Remember variable values")}</span>
+          </label>
+          <p className="muted">{tr("Variable values are saved only on this device after you opt in. Turning this off clears remembered values.")}</p>
+          <button type="button" disabled={memorySaving} onClick={() => void updateVariableMemory()}>{tr("Clear remembered values")}</button>
+          {preferencesError ? <p className="preference-error" role="status">{localizeText(preferencesError)}</p> : null}
         </section>
 
         <input
           className="search"
           type="search"
-          placeholder="Search templates"
+          placeholder={tr("Search templates")}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
 
         <div className="template-list">
           {visibleTemplates.length === 0 ? (
-            <p className="muted">No templates.</p>
+            <p className="muted">{tr("No templates.")}</p>
           ) : (
             visibleTemplates.map((template) => (
               <button
@@ -427,35 +508,35 @@ function OptionsApp() {
           )}
         </div>
 
-        <section className="import-export" aria-label="Import and export">
+        <section className="import-export" aria-label={tr("Import and export")}>
           <button type="button" onClick={exportTemplates}>
-            Export JSON
+            {tr("Export JSON")}
           </button>
           <label className="file-button">
-            Import JSON
+            {tr("Import JSON")}
             <input type="file" disabled={saving} accept="application/json" onChange={handleImportFile} />
           </label>
           {pendingImport ? (
             <div className="import-actions">
               <button type="button" disabled={saving} onClick={() => void applyPendingImport("merge")}>
-                Merge
+                {tr("Merge")}
               </button>
               <button type="button" disabled={saving} onClick={() => void applyPendingImport("overwrite")}>
-                Overwrite
+                {tr("Overwrite")}
               </button>
             </div>
           ) : null}
         </section>
       </aside>
 
-      <section className="editor" aria-label="Template editor">
+      <section className="editor" aria-label={tr("Template editor")}>
         <form onSubmit={(event) => void saveTemplate(event)}>
           <fieldset className="editor-fields" disabled={saving}>
           <div className="editor-header">
             <div>
-              <h2>{selectedTemplate ? "Edit template" : "New template"}</h2>
+              <h2>{tr(selectedTemplate ? "Edit template" : "New template")}</h2>
               <p className={error ? "status error" : "status"}>
-                {error ?? status}
+                {Array.isArray(error) ? error.map(localizeText).join(" ") : localizeText(error ?? status)}
               </p>
             </div>
 
@@ -466,7 +547,7 @@ function OptionsApp() {
                   setError(null);
                   setStatus("Draft kept as a new template. Click Save to create it.");
                 }}>
-                  Keep as new
+                  {tr("Keep as new")}
                 </button>
               ) : null}
               <button
@@ -474,17 +555,17 @@ function OptionsApp() {
                 disabled={!selectedTemplate}
                 onClick={() => void duplicateTemplate()}
               >
-                Copy
+                {tr("Copy")}
               </button>
               <button
                 type="button"
                 disabled={!selectedTemplate}
                 onClick={() => void deleteTemplate()}
               >
-                Delete
+                {tr("Delete")}
               </button>
               <button type="submit" className="primary">
-                Save
+                {tr("Save")}
               </button>
             </div>
           </div>
@@ -505,7 +586,7 @@ function OptionsApp() {
             </label>
 
             <label>
-              <span>Title</span>
+              <span>{tr("Title")}</span>
               <input
                 value={form.title}
                 onChange={(event) =>
@@ -514,12 +595,12 @@ function OptionsApp() {
                     title: event.target.value,
                   }))
                 }
-                placeholder="Rewrite clearer"
+                placeholder={tr("Rewrite clearer")}
               />
             </label>
 
             <label className="wide">
-              <span>Tags</span>
+              <span>{tr("Tags")}</span>
               <input
                 value={form.tags}
                 onChange={(event) =>
@@ -528,7 +609,7 @@ function OptionsApp() {
                     tags: event.target.value,
                   }))
                 }
-                placeholder="writing, rewrite"
+                placeholder={tr("writing, rewrite")}
               />
             </label>
 
@@ -543,11 +624,11 @@ function OptionsApp() {
                   }))
                 }
               />
-              <span>Favorite</span>
+              <span>{tr("Favorite")}</span>
             </label>
 
             <label className="body-field">
-              <span>Body</span>
+              <span>{tr("Body")}</span>
               <textarea
                 value={form.body}
                 onChange={(event) =>
@@ -556,7 +637,7 @@ function OptionsApp() {
                     body: event.target.value,
                   }))
                 }
-                placeholder="Rewrite {{text}} in a clearer tone."
+                placeholder={tr("Rewrite {{text}} in a clearer tone.")}
               />
             </label>
           </div>

@@ -36,6 +36,48 @@ afterEach(() => {
 });
 
 describe("background template RPC", () => {
+  it("validates variable memory payloads and keeps async responses open", async () => {
+    const worker = await setupWorker();
+    for (const payload of [
+      { type: MESSAGE_TYPE.SET_VARIABLE_MEMORY, enabled: "yes" },
+      { type: MESSAGE_TYPE.READ_VARIABLE_MEMORY, templateId: 3 },
+      { type: MESSAGE_TYPE.READ_VARIABLE_MEMORY, templateId: "one" },
+      { type: MESSAGE_TYPE.READ_VARIABLE_MEMORY, templateId: "one", createdAt: 3 },
+      { type: MESSAGE_TYPE.REMEMBER_VARIABLE_VALUES, templateId: "one", values: { name: 2 } },
+      { type: MESSAGE_TYPE.REMEMBER_VARIABLE_VALUES, templateId: "one", values: { name: "Ada" } },
+    ]) {
+      const response = vi.fn();
+      worker.listener(payload, {}, response);
+      expect(response).toHaveBeenCalledExactlyOnceWith({ ok: false, error: "Invalid variable memory request." });
+    }
+    expect(worker.set).not.toHaveBeenCalled();
+    const response = vi.fn();
+    expect(worker.listener({ type: MESSAGE_TYPE.SET_VARIABLE_MEMORY, enabled: true }, {}, response)).toBe(true);
+    await vi.waitFor(() => expect(response).toHaveBeenCalledExactlyOnceWith({ ok: true, enabled: true, values: {} }));
+    const read = vi.fn();
+    expect(worker.listener({ type: MESSAGE_TYPE.READ_VARIABLE_MEMORY }, {}, read)).toBe(true);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledExactlyOnceWith({ ok: true, enabled: true, values: {} }));
+  });
+
+  it("ignores stale template identity reads and writes through the memory RPC", async () => {
+    const worker = await setupWorker();
+    const createdAt = "2026-11-08T00:00:00.000Z";
+    worker.data()[STORAGE_KEYS.templates] = [{
+      id: "one", title: "One", body: "{{name}}", tags: [], isFavorite: false,
+      createdAt, updatedAt: createdAt,
+    }];
+    worker.data()["promptCrate.rememberVariables"] = true;
+    worker.data()["promptCrate.variableValues"] = { one: { createdAt, values: { name: "new" } } };
+    for (const type of [MESSAGE_TYPE.READ_VARIABLE_MEMORY, MESSAGE_TYPE.REMEMBER_VARIABLE_VALUES]) {
+      const response = vi.fn();
+      expect(worker.listener({ type, templateId: "one", createdAt: "2026-01-01T00:00:00.000Z", values: { name: "stale" } }, {}, response)).toBe(true);
+      await vi.waitFor(() => expect(response).toHaveBeenCalledExactlyOnceWith({ ok: true, enabled: true, values: {} }));
+    }
+    expect(worker.set).not.toHaveBeenCalled();
+    const response = vi.fn();
+    worker.listener({ type: MESSAGE_TYPE.READ_VARIABLE_MEMORY, templateId: "one", createdAt }, {}, response);
+    await vi.waitFor(() => expect(response).toHaveBeenCalledExactlyOnceWith({ ok: true, enabled: true, values: { name: "new" } }));
+  });
   it("keeps the response channel open until a queued read completes", async () => {
     const worker = await setupWorker();
     const response = vi.fn();
