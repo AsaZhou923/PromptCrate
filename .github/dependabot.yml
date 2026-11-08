@@ -5,6 +5,10 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
+    ignore:
+      # Keep TypeScript 6 until typescript-eslint supports the next compiler API.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
     groups:
       development-tools:
         dependency-type: development

@@ -10,7 +10,7 @@
 
 ## 发布前执行
 
-使用 Node 24 和 `packageManager` 指定的 pnpm 11.25.0：
+使用 Node 24.15+（24 LTS）或 Node 26+，以及 `packageManager` 指定的 pnpm 11.25.0：
 
 ```bash
 pnpm install --frozen-lockfile

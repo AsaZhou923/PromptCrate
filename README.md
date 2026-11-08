@@ -89,7 +89,7 @@ PromptCrate 只使用 `activeTab`、`scripting`、`storage`。完整说明见 `d
 
 前置：
 
-- Node.js 24 LTS。
+- Node.js 24 LTS（24.15.0 或更高的 24.x 版本），或 Node.js 26+。
 - pnpm 11.25.0，由 `package.json` 的 `packageManager` 固定；安装依赖前用 `pnpm --version` 确认版本。
 - Chrome 或 Chromium。
 - 如果安装环境设置了 `NODE_ENV=production`，用 `pnpm install --prod=false --frozen-lockfile` 安装构建所需的 devDependencies。
