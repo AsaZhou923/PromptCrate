@@ -221,7 +221,7 @@ function parseTemplate(body: string): ParsedTemplate {
 
     position = placeholderPattern.lastIndex;
     const placeholder = match[0];
-    const variable = parseVariable((match[1] ?? match[2] ?? "").trim(), errors);
+    const variable = parseVariable(match[1] ?? match[2] ?? "", errors);
 
     if (!variable) {
       parts.push({ type: "text", value: placeholder });

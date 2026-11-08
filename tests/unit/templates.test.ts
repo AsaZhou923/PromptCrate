@@ -74,6 +74,17 @@ describe("template variables", () => {
     expect(renderTemplate(body, {})).toBe("friendly|warm=kind a=b");
   });
 
+  it.each([
+    ["A{{separator?= }}B", "separator", " ", "A B"],
+    ["{{text=hello\n}}", "text", "hello\n", "hello\n"],
+    ['{{ text "Text" =  hello \n }}', "text", "  hello \n ", "  hello \n "],
+  ])("preserves the complete default payload: %s", (body, name, value, rendered) => {
+    expect(getTemplateDefaultValues(body)).toEqual({ [name]: value });
+    expect(renderTemplate(body, {})).toBe(rendered);
+    expect(renderTemplate(body, {}, { preview: true })).toBe(rendered);
+    expect(validateTemplate({ ...baseTemplate, body })).toEqual([]);
+  });
+
   it("decodes JSON label escapes without evaluating label text", () => {
     const body = String.raw`{{text "A \"quoted\" {label}\n\u6587"=hello}}`;
     expect(extractTemplateVariables(body)).toEqual([
