@@ -6,6 +6,8 @@ import {
 import { MESSAGE_TYPE, isRuntimeMessage } from "../shared/message-contract";
 import { createTemplateStore } from "./template-store";
 import { isTemplateMutation } from "../shared/template-mutations";
+import { isStringMap } from "../shared/variable-memory";
+import { getLanguagePreference, resolveLocale, trForLocale } from "../shared/i18n";
 
 const OPEN_PROMPT_COMMAND = "open-prompt-menu";
 const CONTENT_SCRIPT_FILE = "content-entry.js";
@@ -41,6 +43,28 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
         console.warn("[prompt-crate] Could not broadcast updated templates", getErrorMessage(error));
       });
     }).catch((error: unknown) => sendResponse({ ok: false, error: getErrorMessage(error) }));
+    return true;
+  }
+  if ([MESSAGE_TYPE.READ_VARIABLE_MEMORY, MESSAGE_TYPE.SET_VARIABLE_MEMORY,
+    MESSAGE_TYPE.CLEAR_VARIABLE_MEMORY, MESSAGE_TYPE.REMEMBER_VARIABLE_VALUES].some((type) => type === message.type)) {
+    const payload = message as unknown as Record<string, unknown>;
+    const valid = message.type === MESSAGE_TYPE.READ_VARIABLE_MEMORY
+      ? payload.templateId === undefined || (typeof payload.templateId === "string" && typeof payload.createdAt === "string")
+      : message.type === MESSAGE_TYPE.SET_VARIABLE_MEMORY ? typeof payload.enabled === "boolean"
+        : message.type === MESSAGE_TYPE.CLEAR_VARIABLE_MEMORY ||
+          (typeof payload.templateId === "string" && typeof payload.createdAt === "string" && isStringMap(payload.values));
+    if (!valid) {
+      sendResponse({ ok: false, error: "Invalid variable memory request." });
+      return;
+    }
+    const operation = message.type === MESSAGE_TYPE.READ_VARIABLE_MEMORY
+      ? templateStore.readVariableMemory(payload.templateId as string | undefined, payload.createdAt as string | undefined)
+      : message.type === MESSAGE_TYPE.SET_VARIABLE_MEMORY
+        ? templateStore.setVariableMemoryEnabled(payload.enabled as boolean)
+        : message.type === MESSAGE_TYPE.CLEAR_VARIABLE_MEMORY ? templateStore.clearVariableMemory()
+          : templateStore.rememberVariableValues(payload.templateId as string, payload.values as Record<string, string>, payload.createdAt as string);
+    void operation.then((state) => sendResponse({ ok: true, ...state }))
+      .catch((error: unknown) => sendResponse({ ok: false, error: getErrorMessage(error) }));
     return true;
   }
   if (message.type === MESSAGE_TYPE.TEMPLATES_UPDATED) {
@@ -101,9 +125,11 @@ async function openPromptMenuForTab(tabId: number): Promise<void> {
 async function updateActivationFeedback(tabId: number, request: number, message?: string): Promise<void> {
   if (activeOpenRequests.get(tabId) !== request) return;
   try {
+    const locale = resolveLocale(await getLanguagePreference().catch(() => "system"));
+    if (activeOpenRequests.get(tabId) !== request) return;
     await Promise.all([
       chrome.action.setBadgeText({ tabId, text: message ? "!" : "" }),
-      chrome.action.setTitle({ tabId, title: message ?? "PromptCrate" }),
+      chrome.action.setTitle({ tabId, title: message ? trForLocale(locale, message) : "PromptCrate" }),
       ...(message ? [chrome.action.setBadgeBackgroundColor({ tabId, color: "#b33e32" })] : []),
     ]);
   } catch (error) {

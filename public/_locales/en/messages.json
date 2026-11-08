@@ -1,0 +1,618 @@
+{
+  "ui_catalog_locale": {
+    "message": "en"
+  },
+  "example_title": {
+    "message": "Rewrite clearer"
+  },
+  "extension_name": {
+    "message": "PromptCrate"
+  },
+  "extension_description": {
+    "message": "Local-first prompt snippet inserter for web input fields. No account, no cloud."
+  },
+  "open_prompt_menu": {
+    "message": "Open PromptCrate"
+  },
+  "close": {
+    "message": "Close"
+  },
+  "search_templates": {
+    "message": "Search templates"
+  },
+  "templates": {
+    "message": "Templates"
+  },
+  "no_matches": {
+    "message": "No matching templates."
+  },
+  "matches_limit": {
+    "message": "Showing the first $VALUE1$ of $VALUE2$ matches. Refine your search.",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      },
+      "value2": {
+        "content": "$2"
+      }
+    }
+  },
+  "favorite": {
+    "message": "Favorite"
+  },
+  "optional": {
+    "message": "(optional)"
+  },
+  "multiline_hint": {
+    "message": "Enter for a new line. Ctrl/⌘+Enter to insert."
+  },
+  "back": {
+    "message": "Back"
+  },
+  "insert": {
+    "message": "Insert"
+  },
+  "fill_variable": {
+    "message": "Fill $VALUE1$ before inserting.",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "focus_field": {
+    "message": "Focus a text field before opening PromptCrate. Read-only and disabled fields are not supported."
+  },
+  "load_templates_retry": {
+    "message": "Could not load templates. Close PromptCrate and try again. $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "insert_failed": {
+    "message": "PromptCrate could not insert into this field."
+  },
+  "missing_required_variable": {
+    "message": "Missing required variable: $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "invalid_variable_name": {
+    "message": "Invalid variable name: $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "loading_templates": {
+    "message": "Loading templates..."
+  },
+  "templates_loaded": {
+    "message": "$VALUE1$ templates loaded.",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "load_templates_failed": {
+    "message": "Could not load templates."
+  },
+  "new_template_status": {
+    "message": "New template."
+  },
+  "new_template": {
+    "message": "New template"
+  },
+  "edit_template": {
+    "message": "Edit template"
+  },
+  "new": {
+    "message": "New"
+  },
+  "selection_missing": {
+    "message": "Selected template no longer exists. Select a template or create a new one."
+  },
+  "saved_template": {
+    "message": "Saved \"$VALUE1$\".",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "deleted_template": {
+    "message": "Deleted \"$VALUE1$\".",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "copied_template": {
+    "message": "Copied \"$VALUE1$\".",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "confirm_delete": {
+    "message": "Delete \"$VALUE1$\"?",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "confirm_overwrite": {
+    "message": "Overwrite all existing templates?"
+  },
+  "duplicate_template_id": {
+    "message": "Template ID already exists."
+  },
+  "exported_templates": {
+    "message": "Exported $VALUE1$ templates.",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "import_failed": {
+    "message": "Import failed."
+  },
+  "import_ready": {
+    "message": "$VALUE1$ templates ready to import.",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "imported_overwrite": {
+    "message": "Imported $VALUE1$ templates by overwrite.",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "imported_merge": {
+    "message": "Imported $VALUE1$ new and $VALUE2$ updated templates.",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      },
+      "value2": {
+        "content": "$2"
+      }
+    }
+  },
+  "save_failed": {
+    "message": "Save failed."
+  },
+  "draft_changed": {
+    "message": "Template changed in another tab. Your draft is preserved. Reselect the template to load the latest version before saving."
+  },
+  "draft_deleted": {
+    "message": "Template was deleted in another tab. Your draft is preserved. Use Keep as new to save a copy."
+  },
+  "draft_kept": {
+    "message": "Draft kept as a new template. Click Save to create it."
+  },
+  "keep_as_new": {
+    "message": "Keep as new"
+  },
+  "copy": {
+    "message": "Copy"
+  },
+  "delete": {
+    "message": "Delete"
+  },
+  "save": {
+    "message": "Save"
+  },
+  "no_templates": {
+    "message": "No templates."
+  },
+  "import_export": {
+    "message": "Import and export"
+  },
+  "export_json": {
+    "message": "Export JSON"
+  },
+  "import_json": {
+    "message": "Import JSON"
+  },
+  "merge": {
+    "message": "Merge"
+  },
+  "overwrite": {
+    "message": "Overwrite"
+  },
+  "template_editor": {
+    "message": "Template editor"
+  },
+  "id": {
+    "message": "ID"
+  },
+  "title": {
+    "message": "Title"
+  },
+  "tags": {
+    "message": "Tags"
+  },
+  "body": {
+    "message": "Body"
+  },
+  "preferences": {
+    "message": "Preferences"
+  },
+  "theme": {
+    "message": "Theme"
+  },
+  "system": {
+    "message": "System"
+  },
+  "light": {
+    "message": "Light"
+  },
+  "dark": {
+    "message": "Dark"
+  },
+  "loading_shortcut": {
+    "message": "Loading shortcut..."
+  },
+  "shortcut_unavailable": {
+    "message": "Shortcut unavailable. Use the toolbar button or configure a shortcut."
+  },
+  "shortcut": {
+    "message": "Shortcut: $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "shortcut_unassigned": {
+    "message": "Shortcut not assigned. Use the toolbar button or configure a shortcut."
+  },
+  "configure_shortcut": {
+    "message": "Configure shortcut"
+  },
+  "load_theme_failed": {
+    "message": "Could not load theme. $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "read_shortcut_failed": {
+    "message": "Could not read the shortcut. $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "save_theme_failed": {
+    "message": "Could not save the theme. $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "open_shortcut_failed": {
+    "message": "Could not open shortcut settings. $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "invalid_mutation": {
+    "message": "Invalid template mutation."
+  },
+  "save_conflict": {
+    "message": "Template changed or was deleted in another tab. Reselect it before saving."
+  },
+  "delete_conflict": {
+    "message": "Template changed or was deleted in another tab. Reselect it before deleting."
+  },
+  "import_conflict": {
+    "message": "Templates changed in another tab. Reload the latest templates before importing."
+  },
+  "invalid_storage_response": {
+    "message": "Invalid response from template storage."
+  },
+  "invalid_template_index": {
+    "message": "Template at index $VALUE1$ is invalid.",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "duplicate_id": {
+    "message": "Duplicate template id: $VALUE1$.",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "invalid_json": {
+    "message": "The selected file is not valid JSON."
+  },
+  "import_object": {
+    "message": "Import file must contain an object."
+  },
+  "unsupported_schema": {
+    "message": "Unsupported schemaVersion: $VALUE1$.",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "import_array": {
+    "message": "Import file must contain a templates array."
+  },
+  "import_duplicate": {
+    "message": "Import file contains duplicate template id: $VALUE1$.",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "id_required": {
+    "message": "ID is required."
+  },
+  "id_characters": {
+    "message": "ID can contain letters, numbers, dashes, underscores, and dots."
+  },
+  "title_required": {
+    "message": "Title is required."
+  },
+  "body_required": {
+    "message": "Body is required."
+  },
+  "invalid_template_id": {
+    "message": "Invalid template id."
+  },
+  "activation_unavailable": {
+    "message": "PromptCrate could not open here. Try a regular web page, or reload the page."
+  },
+  "activation_unreachable": {
+    "message": "PromptCrate could not reach this page. Reload it and try again."
+  },
+  "language": {
+    "message": "Language"
+  },
+  "english": {
+    "message": "English"
+  },
+  "chinese": {
+    "message": "简体中文"
+  },
+  "remember_variables": {
+    "message": "Remember variable values"
+  },
+  "remember_variables_help": {
+    "message": "Variable values are saved only on this device after you opt in. Turning this off clears remembered values."
+  },
+  "clear_remembered": {
+    "message": "Clear remembered values"
+  },
+  "remembered_cleared": {
+    "message": "Remembered values cleared."
+  },
+  "variable_memory_failed": {
+    "message": "Could not update variable memory. $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "automatic": {
+    "message": "Automatic"
+  },
+  "variable_default": {
+    "message": "Default: $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "invalid_option": {
+    "message": "Choose a valid option for $VALUE1$.",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "missing_builtin": {
+    "message": "Missing builtin variable: $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "load_language_failed": {
+    "message": "Could not load language. $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "save_language_failed": {
+    "message": "Could not save language. $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "invalid_language": {
+    "message": "Invalid language preference."
+  },
+  "invalid_theme": {
+    "message": "Invalid theme preference."
+  },
+  "example_rewrite": {
+    "message": "Rewrite {{text}} in a clearer tone."
+  },
+  "example_tags": {
+    "message": "writing, rewrite"
+  },
+  "unknown_builtin": {
+    "message": "Unknown builtin variable: $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "invalid_variable_label": {
+    "message": "Invalid variable label: $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "builtin_options": {
+    "message": "Builtin variable cannot have defaults or options: $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "invalid_variable_options": {
+    "message": "Invalid variable options: $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "conflicting_variable_default": {
+    "message": "Conflicting variable default: $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "conflicting_variable_options": {
+    "message": "Conflicting variable options: $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "conflicting_variable_label": {
+    "message": "Conflicting variable label: $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "invalid_variable_default": {
+    "message": "Invalid variable default: $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "invalid_variable_option": {
+    "message": "Invalid option for variable: $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "default_summarize_page_title": {
+    "message": "Summarize page"
+  },
+  "default_summarize_page_body": {
+    "message": "Summarize the key ideas from this page in concise bullets."
+  },
+  "default_summarize_page_tags": {
+    "message": "summary,reading"
+  },
+  "default_rewrite_clearer_title": {
+    "message": "Rewrite clearer"
+  },
+  "default_rewrite_clearer_body": {
+    "message": "Rewrite the following text so it is clearer, shorter, and keeps the original meaning:\n\n{{text}}"
+  },
+  "default_rewrite_clearer_tags": {
+    "message": "writing,rewrite"
+  },
+  "default_compare_options_title": {
+    "message": "Compare options"
+  },
+  "default_compare_options_body": {
+    "message": "Compare {{option_a}} and {{option_b}}. Show tradeoffs, risks, and a recommendation."
+  },
+  "default_compare_options_tags": {
+    "message": "analysis,decision"
+  },
+  "default_draft_reply_title": {
+    "message": "Draft reply"
+  },
+  "default_draft_reply_body": {
+    "message": "Draft a warm, concise reply to this message. Tone: {{tone}}.\n\n{{message}}"
+  },
+  "default_draft_reply_tags": {
+    "message": "email,writing"
+  },
+  "default_extract_actions_title": {
+    "message": "Extract actions"
+  },
+  "default_extract_actions_body": {
+    "message": "Extract action items, owners, and due dates from the text below:\n\n{{notes}}"
+  },
+  "default_extract_actions_tags": {
+    "message": "meeting,tasks"
+  },
+  "default_debug_helper_title": {
+    "message": "Debug helper"
+  },
+  "default_debug_helper_body": {
+    "message": "Given this error and context, identify likely root causes and the next three checks:\n\n{{error}}"
+  },
+  "default_debug_helper_tags": {
+    "message": "coding,debug"
+  },
+  "default_translate_polish_title": {
+    "message": "Translate and polish"
+  },
+  "default_translate_polish_body": {
+    "message": "Translate this into {{language}} and make it natural for a professional reader:\n\n{{text}}"
+  },
+  "default_translate_polish_tags": {
+    "message": "translation,writing"
+  }
+}
