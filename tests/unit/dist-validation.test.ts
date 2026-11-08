@@ -10,8 +10,10 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "promptcrate-verify-"));
   owned.push(root);
   await mkdir(join(root, "icons"));
+  await mkdir(join(root, "_locales", "en"), { recursive: true });
+  await writeFile(join(root, "_locales", "en", "messages.json"), JSON.stringify({ name: { message: "Fixture" } }));
   await writeFile(join(root, "manifest.json"), JSON.stringify({
-    manifest_version: 3, name: "Fixture", version: "0.1.0", version_name: "0.1.0",
+    manifest_version: 3, name: "__MSG_name__", default_locale: "en", version: "0.1.0", version_name: "0.1.0",
     background: { service_worker: "service-worker.js" }, options_ui: { page: "options.html" },
     icons: { "16": "icons/icon.png" },
   }));
@@ -35,7 +37,7 @@ afterEach(async () => {
 describe("extension distribution validation", () => {
   it("validates generated references and returns sorted archive-root paths", async () => {
     const files = await verifyDist(await fixture(), { packageVersion: "0.1.0" });
-    expect(files).toEqual(["content-entry.js", "icons/icon.png", "manifest.json", "options.html", "options.js", "service-worker.js"]);
+    expect(files).toEqual(["_locales/en/messages.json", "content-entry.js", "icons/icon.png", "manifest.json", "options.html", "options.js", "service-worker.js"]);
     expect(files.every((file) => !file.includes("\\") && !file.startsWith("/"))).toBe(true);
   });
 
@@ -94,5 +96,59 @@ describe("extension distribution validation", () => {
     const other = await fixture();
     await symlink(resolve(other), join(root, "linked"), process.platform === "win32" ? "junction" : "dir");
     await expect(verifyDist(root)).rejects.toThrow("symbolic links");
+  });
+
+  it.each([undefined, null, "../en", "en/../../outside", "en\\US", "en%2fUS", ""]) (
+    "rejects missing or unsafe default locale: %j", async (locale) => {
+      const root = await fixture();
+      const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8"));
+      manifest.default_locale = locale;
+      await writeFile(join(root, "manifest.json"), JSON.stringify(manifest));
+      await expect(verifyDist(root)).rejects.toThrow("default_locale");
+    },
+  );
+
+  it("requires the default locale catalog", async () => {
+    const root = await fixture();
+    await rm(join(root, "_locales", "en", "messages.json"));
+    await expect(verifyDist(root)).rejects.toThrow("_locales/en/messages.json");
+  });
+
+  it("resolves manifest messages recursively with Chrome's case insensitive keys", async () => {
+    const root = await fixture();
+    const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8"));
+    manifest.name = "__MSG_NAME__";
+    manifest.commands = { open: { description: "__MSG_NAME__ __MSG_nAmE__" } };
+    await writeFile(join(root, "manifest.json"), JSON.stringify(manifest));
+    await expect(verifyDist(root)).resolves.toContain("_locales/en/messages.json");
+    manifest.commands.open.description = "__MSG_missing_command__";
+    await writeFile(join(root, "manifest.json"), JSON.stringify(manifest));
+    await expect(verifyDist(root)).rejects.toThrow("Missing default locale message: missing_command");
+  });
+
+  it.each([
+    [], null, { name: "Fixture" }, { name: {} }, { name: { message: 123 } },
+    { name: { message: "Fixture", description: [] } },
+    { name: { message: "One" }, NAME: { message: "Two" } },
+    { name: { message: "$VALUE$" } },
+    { name: { message: "$VALUE$", placeholders: {} } },
+    { name: { message: "$VALUE$", placeholders: { value: { content: 1 } } } },
+    { name: { message: "$VALUE$", placeholders: { value: { content: "$1", example: 123 } } } },
+    { name: { message: "$VALUE$", placeholders: { value: { content: "$1" }, VALUE: { content: "$2" } } } },
+  ])("rejects malformed message catalogs: %j", async (catalog) => {
+    const root = await fixture();
+    await writeFile(join(root, "_locales", "en", "messages.json"), JSON.stringify(catalog));
+    await expect(verifyDist(root)).rejects.toThrow(/Invalid locale|Missing locale/);
+  });
+
+  it("accepts named placeholder metadata and validates additional shipped catalogs", async () => {
+    const root = await fixture();
+    await writeFile(join(root, "_locales", "en", "messages.json"), JSON.stringify({
+      name: { message: "Fixture $VALUE$", description: "App name", placeholders: { value: { content: "$1", example: "One" } } },
+    }));
+    await expect(verifyDist(root)).resolves.toContain("_locales/en/messages.json");
+    await mkdir(join(root, "_locales", "zh_CN"));
+    await writeFile(join(root, "_locales", "zh_CN", "messages.json"), JSON.stringify({ name: { message: false } }));
+    await expect(verifyDist(root)).rejects.toThrow("Invalid locale message: _locales/zh_CN/messages.json");
   });
 });

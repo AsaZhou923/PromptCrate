@@ -58,6 +58,31 @@ export async function verifyDist(directory, { packageVersion, requireNotices = f
       throw new Error("Built manifest version does not match package.json.");
     }
   }
+  if (typeof manifest.default_locale !== "string" || !/^[a-z]{2,3}(?:_[A-Za-z0-9]{2,4})?$/.test(manifest.default_locale)) {
+    throw new Error("Invalid or missing manifest default_locale.");
+  }
+  const defaultCatalogPath = `_locales/${manifest.default_locale}/messages.json`;
+  requireFile(defaultCatalogPath);
+  /** @type {Set<string>} */
+  let defaultMessageKeys = new Set();
+  for (const file of files.filter((name) => /^_locales\/[^/]+\/messages\.json$/.test(name))) {
+    const catalog = JSON.parse(await readFile(resolve(root, ...file.split("/")), "utf8"));
+    const keys = validateMessageCatalog(catalog, file);
+    if (file === defaultCatalogPath) defaultMessageKeys = keys;
+  }
+  /** @param {unknown} value */
+  const checkMessages = (value) => {
+    if (typeof value === "string") {
+      for (const match of value.matchAll(/__MSG_([\s\S]*?)__/gi)) {
+        if (!defaultMessageKeys.has(match[1].toLowerCase())) {
+          throw new Error(`Missing default locale message: ${match[1]}`);
+        }
+      }
+    } else if (value && typeof value === "object") {
+      Object.values(value).forEach(checkMessages);
+    }
+  };
+  checkMessages(manifest);
   /** @param {unknown} value @param {string} [from] */
   const reference = (value, from = "") => {
     if (typeof value !== "string" || !value) throw new Error("Invalid extension file reference.");
@@ -112,6 +137,44 @@ export async function verifyDist(directory, { packageVersion, requireNotices = f
     }
   }
   return files;
+}
+
+/** @param {unknown} catalog @param {string} file @returns {Set<string>} */
+function validateMessageCatalog(catalog, file) {
+  if (!catalog || typeof catalog !== "object" || Array.isArray(catalog)) {
+    throw new Error(`Invalid locale catalog: ${file}`);
+  }
+  const keys = new Set();
+  for (const [key, entry] of Object.entries(catalog)) {
+    if (!/^[A-Za-z0-9_@]+$/.test(key) || keys.has(key.toLowerCase()) ||
+      !entry || typeof entry !== "object" || Array.isArray(entry) || typeof entry.message !== "string" ||
+      (entry.description !== undefined && typeof entry.description !== "string")) {
+      throw new Error(`Invalid locale message: ${file}: ${key}`);
+    }
+    keys.add(key.toLowerCase());
+    if (entry.placeholders !== undefined) {
+      if (!entry.placeholders || typeof entry.placeholders !== "object" || Array.isArray(entry.placeholders)) {
+        throw new Error(`Invalid locale placeholders: ${file}: ${key}`);
+      }
+      const placeholderKeys = new Set();
+      for (const [name, placeholder] of Object.entries(entry.placeholders)) {
+        if (!/^[A-Za-z0-9_]+$/.test(name) || placeholderKeys.has(name.toLowerCase()) ||
+          !placeholder || typeof placeholder !== "object" || Array.isArray(placeholder) || typeof placeholder.content !== "string" ||
+          (placeholder.example !== undefined && typeof placeholder.example !== "string")) {
+          throw new Error(`Invalid locale placeholder: ${file}: ${key}: ${name}`);
+        }
+        placeholderKeys.add(name.toLowerCase());
+      }
+      for (const token of entry.message.matchAll(/\$([A-Za-z][A-Za-z0-9_]*)\$/g)) {
+        if (!placeholderKeys.has(token[1].toLowerCase())) {
+          throw new Error(`Missing locale placeholder: ${file}: ${key}: ${token[1]}`);
+        }
+      }
+    } else if (/\$[A-Za-z][A-Za-z0-9_]*\$/.test(entry.message)) {
+      throw new Error(`Missing locale placeholders: ${file}: ${key}`);
+    }
+  }
+  return keys;
 }
 
 /** @param {string} name */

@@ -7,12 +7,16 @@ import { MESSAGE_TYPE, isRuntimeMessage } from "../shared/message-contract";
 import { loadPromptTemplates, commitTemplateMutation } from "../shared/template-client";
 import { calculateMenuPosition } from "./menu-position";
 import { observeTheme, THEME_STYLES } from "../shared/theme";
+import { createBuiltinValues } from "./builtin-values";
+import { localizeText, observeLanguage, resolveLocale, tr } from "../shared/i18n";
+import { loadVariableMemory, MEMORY_ENABLED_KEY, rememberVariableValues } from "../shared/variable-memory";
 import {
   extractTemplateVariables,
   PromptTemplate,
   renderTemplate,
   createTemplateSearch,
   TemplateVariable,
+  getTemplateDefaultValues,
 } from "../shared/templates";
 
 declare global {
@@ -35,6 +39,10 @@ type MenuState = {
   savedSelection: SavedSelection | null;
   chosenTemplate: PromptTemplate | null;
   values: Record<string, string>;
+  context: Record<string, string>;
+  memoryEnabled: boolean;
+  memoryRevision: number;
+  variableDraftRevision: number;
   error: string | null;
   invalidVariable: string | null;
 };
@@ -50,6 +58,29 @@ if (!window.__promptCrateContentEntryLoaded) {
   let state: MenuState | null = null;
   let positionFrame: number | null = null;
   let panelObserver: ResizeObserver | null = null;
+  let locale = resolveLocale();
+  observeLanguage((_preference, nextLocale) => {
+    locale = nextLocale;
+    if (menuHost) menuHost.host.lang = locale.replace("_", "-");
+    if (!state || state.isComposing) return;
+    const active = state.shadow.activeElement;
+    const name = active instanceof HTMLElement ? active.dataset.variableName : undefined;
+    const selection = active instanceof HTMLTextAreaElement ? [active.selectionStart, active.selectionEnd] : null;
+    const searchFocused = active?.classList.contains("search");
+    renderMenu({ focusSearch: searchFocused });
+    if (name) queueMicrotask(() => {
+      const field = [...(state?.shadow.querySelectorAll<HTMLTextAreaElement | HTMLSelectElement>("[data-variable-name]") ?? [])]
+        .find((element) => element.dataset.variableName === name);
+      field?.focus();
+      if (field instanceof HTMLTextAreaElement && selection) field.setSelectionRange(selection[0], selection[1]);
+    });
+  });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (state && area === "local" && MEMORY_ENABLED_KEY in changes) {
+      state.memoryEnabled = changes[MEMORY_ENABLED_KEY].newValue === true;
+      state.memoryRevision += 1;
+    }
+  });
   window.addEventListener("resize", schedulePosition);
   document.addEventListener("scroll", schedulePosition, true);
 
@@ -91,6 +122,10 @@ if (!window.__promptCrateContentEntryLoaded) {
       savedSelection,
       chosenTemplate: null,
       values: {},
+      context: {},
+      memoryEnabled: false,
+      memoryRevision: 0,
+      variableDraftRevision: 0,
       error: savedSelection ? null : "Focus a text field before opening PromptCrate. Read-only and disabled fields are not supported.",
       invalidVariable: null,
     };
@@ -151,6 +186,7 @@ if (!window.__promptCrateContentEntryLoaded) {
     document.getElementById(HOST_ID)?.remove();
     const host = document.createElement("div");
     host.id = HOST_ID;
+    host.lang = locale.replace("_", "-");
     host.style.position = "fixed";
     host.style.zIndex = "2147483647";
     host.style.width = `${MENU_WIDTH}px`;
@@ -327,8 +363,8 @@ if (!window.__promptCrateContentEntryLoaded) {
     const closeButton = document.createElement("button");
     closeButton.className = "icon-button";
     closeButton.type = "button";
-    closeButton.title = "Close";
-    closeButton.setAttribute("aria-label", "Close");
+    closeButton.title = tr("Close");
+    closeButton.setAttribute("aria-label", tr("Close"));
     closeButton.textContent = "\u00d7";
     closeButton.addEventListener("click", closeMenu);
 
@@ -355,7 +391,7 @@ if (!window.__promptCrateContentEntryLoaded) {
     searchInput.setAttribute("aria-controls", "promptcrate-template-list");
     searchInput.setAttribute("aria-expanded", "true");
     searchInput.setAttribute("aria-autocomplete", "list");
-    searchInput.placeholder = "Search templates";
+    searchInput.placeholder = tr("Search templates");
     searchInput.value = state.query;
     const updateQuery = () => {
       if (!state || state.isComposing) {
@@ -383,7 +419,7 @@ if (!window.__promptCrateContentEntryLoaded) {
     list.id = "promptcrate-template-list";
     list.className = "template-list";
     list.setAttribute("role", "listbox");
-    list.setAttribute("aria-label", "Templates");
+    list.setAttribute("aria-label", tr("Templates"));
     renderTemplateResults(list, searchInput);
 
     wrapper.append(searchInput, list);
@@ -443,7 +479,7 @@ if (!window.__promptCrateContentEntryLoaded) {
           const favorite = document.createElement("span");
           favorite.textContent = "★ ";
           favorite.setAttribute("role", "img");
-          favorite.setAttribute("aria-label", "Favorite");
+          favorite.setAttribute("aria-label", tr("Favorite"));
           title.append(favorite);
         }
         title.append(document.createTextNode(template.title));
@@ -592,21 +628,48 @@ if (!window.__promptCrateContentEntryLoaded) {
   }
 
   async function chooseTemplate(template: PromptTemplate): Promise<void> {
-    if (!state) {
+    if (!state || state.chosenTemplate) {
       return;
     }
 
+    const currentState = state;
     const variables = extractTemplateVariables(template.body);
+    currentState.context = createBuiltinValues(variables.filter((variable) => variable.builtin).map((variable) => variable.name), currentState.savedSelection);
 
-    if (variables.length === 0) {
-      await insertRenderedTemplate(template, renderTemplate(template.body, {}));
+    if (variables.every((variable) => variable.builtin)) {
+      try {
+        await insertRenderedTemplate(template, renderTemplate(template.body, {}, { context: currentState.context }));
+      } catch (error) {
+        currentState.error = error instanceof Error ? error.message : String(error);
+        renderMenu();
+      }
       return;
     }
 
-    state.chosenTemplate = template;
-    state.invalidVariable = null;
-    state.values = {};
-    state.error = null;
+    currentState.chosenTemplate = template;
+    currentState.invalidVariable = null;
+    currentState.values = getTemplateDefaultValues(template.body);
+    currentState.error = null;
+    const draftRevision = ++currentState.variableDraftRevision;
+    const memoryRevision = currentState.memoryRevision;
+    try {
+      const memory = await loadVariableMemory(template.id, template.createdAt);
+      if (state !== currentState) return;
+      if (currentState.memoryRevision === memoryRevision) currentState.memoryEnabled = memory.enabled;
+      if (currentState.chosenTemplate !== template || currentState.variableDraftRevision !== draftRevision) return;
+      if (memory.enabled && currentState.memoryRevision === memoryRevision) {
+        for (const variable of variables.filter((entry) => !entry.builtin)) {
+          const value = Object.hasOwn(memory.values, variable.name) ? memory.values[variable.name] : undefined;
+          if (value !== undefined && (!variable.required || value.trim()) &&
+            (!variable.options || variable.options.includes(value) || (!variable.required && value === ""))) {
+            Object.defineProperty(currentState.values, variable.name, { value, enumerable: true, writable: true, configurable: true });
+          }
+        }
+      }
+    } catch (error) {
+      console.warn("[prompt-crate] Could not load variable memory", error);
+    }
+    if (state !== currentState || currentState.chosenTemplate !== template || currentState.variableDraftRevision !== draftRevision) return;
     renderMenu();
   }
 
@@ -616,7 +679,7 @@ if (!window.__promptCrateContentEntryLoaded) {
     }
 
     const template = state.chosenTemplate;
-    const variables = extractTemplateVariables(template.body);
+    const variables = extractTemplateVariables(template.body).filter((variable) => !variable.builtin);
     const wrapper = document.createElement("form");
     wrapper.className = "variable-form";
     wrapper.addEventListener("submit", (event) => {
@@ -635,10 +698,20 @@ if (!window.__promptCrateContentEntryLoaded) {
       label.className = "field";
 
       const span = document.createElement("span");
-      span.textContent = variable.required ? variable.name : `${variable.name} (optional)`;
+      const fieldName = variable.label ?? variable.name;
+      span.textContent = variable.required ? fieldName : `${fieldName} ${tr("(optional)")}`;
 
-      const input = document.createElement("textarea");
-      input.rows = 2;
+      const input = variable.options ? document.createElement("select") : document.createElement("textarea");
+      if (input instanceof HTMLTextAreaElement) input.rows = 2;
+      if (input instanceof HTMLSelectElement) {
+        const choices = variable.required ? variable.options! : ["", ...variable.options!];
+        for (const value of choices) {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = value;
+          input.append(option);
+        }
+      }
       input.dataset.variableName = variable.name;
       input.value = getVariableValue(variable.name);
       input.required = variable.required;
@@ -651,7 +724,8 @@ if (!window.__promptCrateContentEntryLoaded) {
           ...state.values,
           [variable.name]: input.value,
         };
-        resizeVariableInput(input);
+        state.variableDraftRevision += 1;
+        if (input instanceof HTMLTextAreaElement) resizeVariableInput(input);
         updatePreview(wrapper, template);
       });
 
@@ -662,7 +736,7 @@ if (!window.__promptCrateContentEntryLoaded) {
     const preview = document.createElement("pre");
     preview.className = "preview";
     preview.dataset.role = "preview";
-    preview.textContent = renderTemplate(template.body, state.values, { preview: true });
+    preview.textContent = renderTemplate(template.body, state.values, { preview: true, context: state.context });
     wrapper.append(preview);
 
     if (state.error) {
@@ -671,7 +745,7 @@ if (!window.__promptCrateContentEntryLoaded) {
 
     const hint = document.createElement("p");
     hint.className = "form-hint";
-    hint.textContent = "Enter for a new line. Ctrl/⌘+Enter to insert.";
+    hint.textContent = tr("Enter for a new line. Ctrl/⌘+Enter to insert.");
     wrapper.append(hint);
 
     const actions = document.createElement("div");
@@ -679,7 +753,7 @@ if (!window.__promptCrateContentEntryLoaded) {
 
     const backButton = document.createElement("button");
     backButton.type = "button";
-    backButton.textContent = "Back";
+    backButton.textContent = tr("Back");
     backButton.addEventListener("click", () => {
       if (!state) {
         return;
@@ -695,7 +769,7 @@ if (!window.__promptCrateContentEntryLoaded) {
     const insertButton = document.createElement("button");
     insertButton.type = "submit";
     insertButton.className = "primary";
-    insertButton.textContent = "Insert";
+    insertButton.textContent = tr("Insert");
     insertButton.setAttribute("aria-keyshortcuts", "Control+Enter Meta+Enter");
 
     actions.append(backButton, insertButton);
@@ -703,7 +777,7 @@ if (!window.__promptCrateContentEntryLoaded) {
 
     queueMicrotask(() => {
       wrapper.querySelectorAll("textarea").forEach(resizeVariableInput);
-      const fields = [...wrapper.querySelectorAll("textarea")];
+      const fields = [...wrapper.querySelectorAll<HTMLTextAreaElement | HTMLSelectElement>("[data-variable-name]")];
       (fields.find((field) => field.dataset.variableName === state?.invalidVariable) ?? fields[0])?.focus();
     });
 
@@ -740,7 +814,7 @@ if (!window.__promptCrateContentEntryLoaded) {
     }
 
     try {
-      const rendered = renderTemplate(state.chosenTemplate.body, state.values);
+      const rendered = renderTemplate(state.chosenTemplate.body, state.values, { context: state.context });
       await insertRenderedTemplate(state.chosenTemplate, rendered);
     } catch (error) {
       if (!state) {
@@ -767,7 +841,11 @@ if (!window.__promptCrateContentEntryLoaded) {
       return;
     }
 
+    const memory = state.memoryEnabled ? { ...state.values } : null;
     closeMenu();
+    if (memory) void rememberVariableValues(template.id, memory, template.createdAt).catch((error: unknown) => {
+      console.warn("[prompt-crate] Could not remember variable values", error);
+    });
     void commitTemplateMutation({ kind: "touch", id: template.id }).catch((error: unknown) => {
       console.warn("[prompt-crate] Could not record template usage", error);
     });
@@ -788,7 +866,7 @@ if (!window.__promptCrateContentEntryLoaded) {
 
     const preview = form.querySelector<HTMLElement>('[data-role="preview"]');
     if (preview) {
-      preview.textContent = renderTemplate(template.body, state.values, { preview: true });
+      preview.textContent = renderTemplate(template.body, state.values, { preview: true, context: state.context });
     }
   }
 
@@ -797,7 +875,7 @@ if (!window.__promptCrateContentEntryLoaded) {
     notice.className = `notice ${tone}`;
     notice.setAttribute("role", tone === "error" ? "alert" : "status");
     notice.setAttribute("aria-live", tone === "error" ? "assertive" : "polite");
-    notice.textContent = message;
+    notice.textContent = localizeText(message);
     return notice;
   }
 
@@ -846,6 +924,7 @@ if (!window.__promptCrateContentEntryLoaded) {
 
       button,
       input,
+      select,
       textarea {
         font: inherit;
       }
@@ -948,7 +1027,8 @@ if (!window.__promptCrateContentEntryLoaded) {
         font-weight: 700;
       }
 
-      .field textarea {
+      .field textarea,
+      .field select {
         width: 100%;
         min-height: 64px;
         max-height: 160px;
@@ -959,6 +1039,8 @@ if (!window.__promptCrateContentEntryLoaded) {
         border-radius: 7px;
         background: var(--pc-input);
       }
+
+      .field select { min-height: 38px; }
 
       .form-hint {
         margin: 0;

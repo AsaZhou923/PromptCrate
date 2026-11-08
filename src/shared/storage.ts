@@ -6,6 +6,8 @@ import {
   STORAGE_SCHEMA_VERSION,
   validateTemplateCollection,
 } from "./templates";
+import { LANGUAGE_STORAGE_KEY, resolveLocale } from "./i18n";
+import { MEMORY_VALUES_KEY } from "./variable-memory";
 
 export type PromptCrateStore = {
   schemaVersion: number;
@@ -28,11 +30,14 @@ export async function initializePromptCrateStorage(
   const existing = await storage.get([
     STORAGE_KEYS.schemaVersion,
     STORAGE_KEYS.templates,
+    LANGUAGE_STORAGE_KEY,
+    MEMORY_VALUES_KEY,
   ]);
 
   const storedTemplates = existing[STORAGE_KEYS.templates];
   const updates: Record<string, unknown> = {};
   let templates: PromptTemplate[];
+  let resetTemplates = false;
 
   if (Array.isArray(storedTemplates) && storedTemplates.every(isPromptTemplate)) {
     const validation = validateTemplateCollection(storedTemplates, now);
@@ -44,7 +49,8 @@ export async function initializePromptCrateStorage(
         updates[STORAGE_KEYS.templates] = templates;
       }
     } else {
-      templates = createDefaultTemplates(now);
+      resetTemplates = true;
+      templates = createDefaultTemplates(now, resolveLocale(existing[LANGUAGE_STORAGE_KEY]));
       updates[STORAGE_KEYS.templates] = templates;
       updates[STORAGE_KEYS.invalidTemplatesBackup] = {
         reason: validation.error,
@@ -53,7 +59,8 @@ export async function initializePromptCrateStorage(
       };
     }
   } else {
-    templates = createDefaultTemplates(now);
+    resetTemplates = true;
+    templates = createDefaultTemplates(now, resolveLocale(existing[LANGUAGE_STORAGE_KEY]));
     updates[STORAGE_KEYS.templates] = templates;
 
     if (Array.isArray(storedTemplates)) {
@@ -69,6 +76,10 @@ export async function initializePromptCrateStorage(
     schemaVersion: STORAGE_SCHEMA_VERSION,
     templates,
   };
+
+  if (resetTemplates && existing[MEMORY_VALUES_KEY] !== undefined) {
+    updates[MEMORY_VALUES_KEY] = {};
+  }
 
   if (existing[STORAGE_KEYS.schemaVersion] !== STORAGE_SCHEMA_VERSION) {
     updates[STORAGE_KEYS.schemaVersion] = store.schemaVersion;
@@ -91,6 +102,7 @@ export async function readPromptTemplates(
 export async function writePromptTemplates(
   templates: PromptTemplate[],
   storage = getChromeLocalStorage(),
+  storageUpdates: Record<string, unknown> = {},
 ): Promise<void> {
   const validation = validateTemplateCollection(templates);
 
@@ -99,6 +111,7 @@ export async function writePromptTemplates(
   }
 
   await storage.set({
+    ...storageUpdates,
     [STORAGE_KEYS.schemaVersion]: STORAGE_SCHEMA_VERSION,
     [STORAGE_KEYS.templates]: validation.templates,
   });

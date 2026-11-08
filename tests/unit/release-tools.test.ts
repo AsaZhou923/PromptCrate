@@ -235,8 +235,10 @@ describe("portable development watch lifecycle", () => {
 async function writeFixture(distDir: string) {
   const metadata = JSON.parse(await readFile(resolve("package.json"), "utf8")) as { version: string };
   await mkdir(join(distDir, "icons"), { recursive: true });
+  await mkdir(join(distDir, "_locales", "en"), { recursive: true });
+  await writeFile(join(distDir, "_locales", "en", "messages.json"), JSON.stringify({ name: { message: "Fixture" } }));
   await writeFile(join(distDir, "manifest.json"), JSON.stringify({
-    manifest_version: 3, name: "Fixture", version: metadata.version.split("-")[0], version_name: metadata.version,
+    manifest_version: 3, name: "__MSG_name__", default_locale: "en", version: metadata.version.split("-")[0], version_name: metadata.version,
     background: { service_worker: "service-worker.js", type: "module" }, options_ui: { page: "options.html" },
     icons: { "16": "icons/icon.png" },
   }));
@@ -298,6 +300,8 @@ describe("release packaging", () => {
     expect([...files.keys()]).toContain("manifest.json");
     expect([...files.keys()]).toContain("content-entry.js");
     expect([...files.keys()]).toContain("icons/icon.png");
+    expect([...files.keys()]).toContain("_locales/en/messages.json");
+    expect(JSON.parse(files.get("_locales/en/messages.json")!.toString()).name.message).toBe("Fixture");
     expect([...files.keys()].some((name) => name.startsWith("dist/") || name.includes("\\"))).toBe(false);
     expect(files.get("shared.js")!.toString()).toBe("export const ready = true;");
     expect(await readdir(outputDir)).toEqual([archive.slice(archive.lastIndexOf(sep) + 1)]);
