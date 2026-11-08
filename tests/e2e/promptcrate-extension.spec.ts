@@ -14,6 +14,7 @@ import { promises as fs } from "node:fs";
 import fsSync from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { build } from "vite";
 import { detectFocusedInsertTarget } from "../../src/background/frame-targeting";
 
 type PromptTemplateRecord = {
@@ -753,30 +754,24 @@ test("native insertion and undo update React controlled inputs", async ({ browse
     await resetExtensionStorage(app.extensionId, app.context);
     const page = await app.context.newPage();
     await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
-    await page.addScriptTag({ path: path.join(repoRoot, "node_modules/react/umd/react.production.min.js") });
-    await page.addScriptTag({ path: path.join(repoRoot, "node_modules/react-dom/umd/react-dom.production.min.js") });
-    await page.evaluate(() => {
-      const { React, ReactDOM } = window as unknown as {
-        React: typeof import("react");
-        ReactDOM: typeof import("react-dom/client");
-      };
-      const host = document.createElement("div");
-      document.body.prepend(host);
-      function Editor() {
-        const [input, setInput] = React.useState("Before REPLACE after");
-        const [textarea, setTextarea] = React.useState("Before REPLACE after");
-        return React.createElement("div", null,
-          React.createElement("input", {
-            id: "react-input", value: input,
-            onChange: (event: { target: { value: string } }) => setInput(event.target.value),
-          }),
-          React.createElement("textarea", {
-            id: "react-textarea", value: textarea,
-            onChange: (event: { target: { value: string } }) => setTextarea(event.target.value),
-          }));
-      }
-      ReactDOM.createRoot(host).render(React.createElement(Editor, null));
+    const fixtureDirectory = testInfo.outputPath("react-fixture");
+    await build({
+      configFile: false,
+      publicDir: false,
+      logLevel: "error",
+      define: { "process.env.NODE_ENV": JSON.stringify("production") },
+      build: {
+        outDir: fixtureDirectory,
+        emptyOutDir: true,
+        lib: {
+          entry: path.join(repoRoot, "tests/e2e/fixtures/react-controlled.ts"),
+          name: "ReactControlledFixture",
+          formats: ["iife"],
+          fileName: () => "react-controlled.js",
+        },
+      },
     });
+    await page.addScriptTag({ path: path.join(fixtureDirectory, "react-controlled.js") });
     for (const selector of ["#react-input", "#react-textarea"]) {
       const target = page.locator(selector);
       await expect(target).toHaveValue("Before REPLACE after");
