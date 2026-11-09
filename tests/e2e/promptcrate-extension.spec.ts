@@ -2356,6 +2356,57 @@ test("Options combines tag filters and exports or deletes only the selected temp
   }
 });
 
+test("bulk deletion preserves an unrelated draft whose template was deleted in another Options tab", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-bulk-orphaned-draft"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    const records = [
+      createTemplate("alpha", "Alpha", "Original Alpha body", []),
+      createTemplate("beta", "Beta", "Unrelated Beta body", []),
+      createTemplate("gamma", "Gamma", "Unrelated Gamma body", []),
+    ];
+    await options.evaluate((templates) => chrome.storage.local.set({ "promptCrate.templates": templates }), records);
+    await options.locator(".template-row").filter({ hasText: "Alpha" }).click();
+    await options.getByLabel("Title", { exact: true }).fill("Unfinished Alpha draft");
+    await options.getByLabel("Body", { exact: true }).fill("This draft must survive deleting Beta");
+
+    const second = await app.context.newPage();
+    await second.goto(`chrome-extension://${app.extensionId}/options.html`);
+    await second.locator(".template-row").filter({ hasText: "Alpha" }).click();
+    second.once("dialog", (dialog) => { void dialog.accept(); });
+    await second.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(second.locator(".status")).toContainText('Deleted "Alpha".');
+    await expect(options.getByRole("button", { name: "Keep as new", exact: true })).toBeVisible();
+    await expect(options.getByLabel("ID", { exact: true })).toHaveValue("alpha");
+    await expect(options.getByLabel("Title", { exact: true })).toHaveValue("Unfinished Alpha draft");
+    await expect(options.getByLabel("Body", { exact: true })).toHaveValue("This draft must survive deleting Beta");
+
+    await options.getByRole("checkbox", { name: 'Select "Beta"', exact: true }).check();
+    options.once("dialog", (dialog) => {
+      expect(dialog.message()).toBe("Delete 1 selected templates?");
+      void dialog.accept();
+    });
+    await options.getByRole("button", { name: "Delete selected", exact: true }).click();
+    await expect.poll(async () => (await readTemplates(options)).map((record) => record.id)).toEqual(["gamma"]);
+    await expect(options.getByRole("button", { name: "Keep as new", exact: true })).toBeVisible();
+    await expect(options.getByLabel("ID", { exact: true })).toHaveValue("alpha");
+    await expect(options.getByLabel("Title", { exact: true })).toHaveValue("Unfinished Alpha draft");
+    await expect(options.getByLabel("Body", { exact: true })).toHaveValue("This draft must survive deleting Beta");
+
+    await options.getByRole("button", { name: "Keep as new", exact: true }).click();
+    await options.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(options.locator(".status")).toContainText('Saved "Unfinished Alpha draft".');
+    const saved = await readTemplates(options);
+    expect(saved.map((record) => record.id).sort()).toEqual(["gamma", "unfinished-alpha-draft"]);
+    expect(saved.find((record) => record.id === "unfinished-alpha-draft")).toMatchObject({
+      title: "Unfinished Alpha draft", body: "This draft must survive deleting Beta",
+    });
+  } finally {
+    await app.context.close();
+  }
+});
+
 test("Options persists manual order from keyboard moves and drag handles", async ({ browserName }, testInfo) => {
   expect(browserName).toBe("chromium");
   const app = await launchPromptCrate(testInfo.outputPath("profile-manual-order"));

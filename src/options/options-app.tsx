@@ -419,8 +419,8 @@ function OptionsApp() {
   async function deleteMany(previous: PromptTemplate[]): Promise<void> {
     if (previous.some((item) => item.id === editorRef.current.selectedId) && !mayDiscardDraft()) return;
     if (!confirm(tr("Delete $1 selected templates?", previous.length))) return;
-    await persistMutation({ kind: "deleteMany", previous }, () => `Deleted ${previous.length} templates.`, (result) => {
-      if (editorRef.current.selectedId && !result.templates.some((item) => item.id === editorRef.current.selectedId)) replaceEditor(EMPTY_EDITOR);
+    await persistMutation({ kind: "deleteMany", previous }, () => `Deleted ${previous.length} templates.`, () => {
+      if (previous.some((item) => item.id === editorRef.current.selectedId)) replaceEditor(EMPTY_EDITOR);
     });
   }
 
