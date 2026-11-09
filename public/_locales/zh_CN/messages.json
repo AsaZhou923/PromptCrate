@@ -614,5 +614,276 @@
   },
   "default_translate_polish_tags": {
     "message": "翻译,写作"
+  },
+  "discard_unsaved_changes": {
+    "message": "丢弃未保存的修改？"
+  },
+  "delete_selected_confirm": {
+    "message": "删除已选的 $VALUE1$ 个模板？",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "deleted_templates": {
+    "message": "已删除 $VALUE1$ 个模板。",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "template_order_saved": {
+    "message": "模板顺序已保存。"
+  },
+  "recovery_no_valid_templates": {
+    "message": "没有可恢复的有效模板。请导出备份后检查。"
+  },
+  "recovery_preview_result": {
+    "message": "已提取 $VALUE1$ 个模板供预览，跳过 $VALUE2$ 个无效条目。",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      },
+      "value2": {
+        "content": "$2"
+      }
+    }
+  },
+  "load_library_details_failed": {
+    "message": "无法加载模板库详情。$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "template_library": {
+    "message": "模板库"
+  },
+  "filter_tags_match_all": {
+    "message": "按标签筛选（全部匹配）"
+  },
+  "clear_tag_filters": {
+    "message": "清空标签筛选"
+  },
+  "sort_templates": {
+    "message": "模板排序"
+  },
+  "sort_recommended": {
+    "message": "推荐顺序"
+  },
+  "sort_manual": {
+    "message": "手动顺序"
+  },
+  "sort_recently_updated": {
+    "message": "最近修改"
+  },
+  "reorder_clear_filters": {
+    "message": "请清空搜索和标签筛选后调整模板顺序。"
+  },
+  "reorder_instructions": {
+    "message": "拖动排序手柄，或使用上移、下移按钮。这会更改 Options 列表的顺序。"
+  },
+  "bulk_actions": {
+    "message": "批量操作"
+  },
+  "selected_count": {
+    "message": "已选 $VALUE1$ 项",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "select_visible": {
+    "message": "选择当前可见项"
+  },
+  "clear_selection": {
+    "message": "清空选择"
+  },
+  "export_selected": {
+    "message": "导出已选模板"
+  },
+  "delete_selected": {
+    "message": "删除已选模板"
+  },
+  "select_template": {
+    "message": "选择“$VALUE1$”",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "reorder_template": {
+    "message": "调整“$VALUE1$”的顺序",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "move_template_up": {
+    "message": "将“$VALUE1$”上移",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "move_template_down": {
+    "message": "将“$VALUE1$”下移",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "move_up": {
+    "message": "上移"
+  },
+  "move_down": {
+    "message": "下移"
+  },
+  "import_preview": {
+    "message": "导入预览"
+  },
+  "cancel_import": {
+    "message": "取消导入"
+  },
+  "import_preview_counts": {
+    "message": "新增：$VALUE1$ · 覆盖：$VALUE2$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      },
+      "value2": {
+        "content": "$2"
+      }
+    }
+  },
+  "select_all_imports": {
+    "message": "全选导入项"
+  },
+  "clear_import_selection": {
+    "message": "清空导入选择"
+  },
+  "import_template": {
+    "message": "导入“$VALUE1$”",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "replace_existing": {
+    "message": "覆盖已有模板"
+  },
+  "no_templates_to_import": {
+    "message": "没有可导入的模板。"
+  },
+  "import_mode_explanation": {
+    "message": "合并会保留其他模板。覆盖会仅用已选导入项替换整个模板库。"
+  },
+  "library_storage_recovery": {
+    "message": "模板库存储与恢复"
+  },
+  "storage": {
+    "message": "存储"
+  },
+  "storage_usage_with_quota": {
+    "message": "已用 $VALUE1$ MiB，共 $VALUE2$ MiB（$VALUE3$%）。",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      },
+      "value2": {
+        "content": "$2"
+      },
+      "value3": {
+        "content": "$3"
+      }
+    }
+  },
+  "storage_usage_without_quota": {
+    "message": "已用 $VALUE1$ MiB。",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "storage_usage_unavailable": {
+    "message": "无法获取存储用量。"
+  },
+  "storage_almost_full": {
+    "message": "存储空间即将用尽。请导出备份，并删除不再需要的模板。"
+  },
+  "saved_recovery_backups": {
+    "message": "已保存的恢复备份"
+  },
+  "recovery_backups_explanation": {
+    "message": "存储出现问题时已备份旧模板数据。恢复前可先导出备份，或预览可恢复的模板。"
+  },
+  "export_backup": {
+    "message": "导出备份"
+  },
+  "try_recovery": {
+    "message": "尝试恢复"
+  },
+  "template_preview": {
+    "message": "模板预览"
+  },
+  "variables": {
+    "message": "变量"
+  },
+  "required": {
+    "message": "必填"
+  },
+  "optional_label": {
+    "message": "可选"
+  },
+  "no_variables_detected": {
+    "message": "未检测到变量。"
+  },
+  "preview_value": {
+    "message": "预览值：$VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "preview_values_explanation": {
+    "message": "预览值仅为示例，不会保存。内置变量使用示例页面信息。"
+  },
+  "example_page": {
+    "message": "示例页面"
+  },
+  "example_selected_text": {
+    "message": "示例选中文本"
+  },
+  "invalid_import_container": {
+    "message": "导入文件必须包含对象或数组。"
+  },
+  "selected_templates_delete_conflict": {
+    "message": "所选模板已在另一标签页中修改或删除。请重新选择后再删除。"
+  },
+  "template_reorder_conflict": {
+    "message": "模板已在另一标签页中修改。请重新加载最新模板后再调整顺序。"
+  },
+  "invalid_template_order": {
+    "message": "模板顺序必须包含当前全部模板，且每个模板只能出现一次。"
+  },
+  "invalid_storage_usage_response": {
+    "message": "存储用量响应无效。"
+  },
+  "invalid_library_metadata_response": {
+    "message": "模板库元数据存储响应无效。"
+  },
+  "invalid_stored_templates": {
+    "message": "已存储的数据不是有效的 PromptCrate 模板。"
   }
 }

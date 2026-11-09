@@ -1,5 +1,9 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { TemplateLibrary } from "./template-library";
+import { ImportPreview } from "./import-preview";
+import { LibraryHealth } from "./library-health";
+import { VariablePreview } from "./variable-preview";
 import { localizeText, observeLanguage, setLanguagePreference, tr, type LanguagePreference } from "../shared/i18n";
 import {
   clearVariableMemory, loadVariableMemory, MEMORY_ENABLED_KEY, setVariableMemoryEnabled,
@@ -7,9 +11,10 @@ import {
 import {
   createTemplateExportPayload,
   parseTemplateImportJson,
+  parseTemplateBackup,
   TemplateExportPayload,
 } from "../shared/import-export";
-import { loadPromptTemplates, commitTemplateMutation } from "../shared/template-client";
+import { loadPromptTemplates, commitTemplateMutation, loadLibraryMetadata, type LibraryMetadata, type TemplateBackup } from "../shared/template-client";
 import { sameTemplateRevision, type TemplateMutation, type MutationResult } from "../shared/template-mutations";
 import {
   getThemePreference, observeTheme, parseThemePreference, setThemePreference,
@@ -19,7 +24,6 @@ import {
   normalizeTags,
   normalizeTemplate,
   PromptTemplate,
-  createTemplateSearch,
   STORAGE_KEYS,
   validateTemplate,
 } from "../shared/templates";
@@ -47,6 +51,7 @@ type EditorState = {
 };
 
 const EMPTY_EDITOR: EditorState = { selectedId: null, form: EMPTY_FORM, baseline: null };
+type PendingImport = { payload: TemplateExportPayload; expected: PromptTemplate[] };
 
 function OptionsApp() {
   const [templates, setTemplates] = useState<PromptTemplate[]>([]);
@@ -56,10 +61,15 @@ function OptionsApp() {
   const writingRef = useRef(false);
   const [saving, setSaving] = useState(false);
   const refreshRef = useRef<() => Promise<void>>(async () => {});
-  const [query, setQuery] = useState("");
   const [status, setStatus] = useState("Loading templates...");
   const [error, setError] = useState<string | string[] | null>(null);
-  const [pendingImport, setPendingImport] = useState<TemplateExportPayload | null>(null);
+  const [pendingImport, setPendingImport] = useState<PendingImport | null>(null);
+  const [metadata, setMetadata] = useState<LibraryMetadata | null>(null);
+  const [metadataError, setMetadataError] = useState<string | null>(null);
+  const templatesRef = useRef(templates);
+  templatesRef.current = templates;
+  const formRef = useRef<HTMLFormElement>(null);
+  const importSequence = useRef(0);
   const [theme, setTheme] = useState<ThemePreference>("system");
   const [themeSaving, setThemeSaving] = useState(false);
   const [shortcut, setShortcut] = useState<string | null | undefined>(undefined);
@@ -69,6 +79,53 @@ function OptionsApp() {
   const [rememberVariables, setRememberVariables] = useState(false);
   const [memorySaving, setMemorySaving] = useState(true);
   const [, setLocaleRevision] = useState(0);
+
+  useEffect(() => {
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (!isEditorDirty(editorRef.current)) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    const saveKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s" && !event.isComposing) {
+        event.preventDefault();
+        if (!event.repeat && !writingRef.current) formRef.current?.requestSubmit();
+      }
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+    window.addEventListener("keydown", saveKey);
+    return () => {
+      importSequence.current += 1;
+      window.removeEventListener("beforeunload", beforeUnload);
+      window.removeEventListener("keydown", saveKey);
+    };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    let sequence = 0;
+    const refresh = async () => {
+      const request = ++sequence;
+      try {
+        const value = await loadLibraryMetadata();
+        if (mounted && request === sequence) {
+          setMetadata(value);
+          setMetadataError(null);
+        }
+      } catch (error) {
+        if (mounted && request === sequence) setMetadataError(`Could not load library details. ${getErrorMessage(error)}`);
+      }
+    };
+    const changed = (_changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area === "local") void refresh();
+    };
+    chrome.storage.onChanged.addListener(changed);
+    void refresh();
+    return () => {
+      mounted = false;
+      chrome.storage.onChanged.removeListener(changed);
+    };
+  }, []);
 
   useEffect(() => observeLanguage((preference, locale) => {
     document.documentElement.lang = locale === "zh_CN" ? "zh-CN" : "en";
@@ -198,16 +255,21 @@ function OptionsApp() {
     [selectedId, templates],
   );
 
-  const search = useMemo(() => createTemplateSearch(templates), [templates]);
-  const visibleTemplates = useMemo(() => search(query), [query, search]);
   const hasConflict = baseline !== null && !sameTemplateRevision(selectedTemplate, baseline);
 
+  function mayDiscardDraft(): boolean {
+    return !isEditorDirty(editorRef.current) || confirm(tr("Discard unsaved changes?"));
+  }
+
   function selectTemplate(template: PromptTemplate): void {
+    if (editorRef.current.selectedId === template.id && sameTemplateRevision(editorRef.current.baseline, template)) return;
+    if (writingRef.current || !mayDiscardDraft()) return;
     replaceEditor({ selectedId: template.id, form: templateToForm(template), baseline: template });
     setError(null);
   }
 
   function startNewTemplate(): void {
+    if (writingRef.current || !mayDiscardDraft()) return;
     replaceEditor(EMPTY_EDITOR);
     setError(null);
     setStatus("New template.");
@@ -314,6 +376,8 @@ function OptionsApp() {
       return;
     }
 
+    if (!mayDiscardDraft()) return;
+
     if (!confirm(tr('Delete "$1"?', selectedTemplate.title))) {
       return;
     }
@@ -326,6 +390,8 @@ function OptionsApp() {
     if (!selectedTemplate) {
       return;
     }
+
+    if (!mayDiscardDraft()) return;
 
     const now = new Date().toISOString();
     const copy: PromptTemplate = {
@@ -345,18 +411,33 @@ function OptionsApp() {
     });
   }
 
-  function exportTemplates(): void {
-    const payload = createTemplateExportPayload(templates);
-    const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], {
-      type: "application/json",
+  function exportTemplates(items: PromptTemplate[] = templates): void {
+    downloadJson(createTemplateExportPayload(items), `promptcrate-templates-${new Date().toISOString().slice(0, 10)}.json`);
+    setStatus(`Exported ${items.length} templates.`);
+  }
+
+  async function deleteMany(previous: PromptTemplate[]): Promise<void> {
+    if (previous.some((item) => item.id === editorRef.current.selectedId) && !mayDiscardDraft()) return;
+    if (!confirm(tr("Delete $1 selected templates?", previous.length))) return;
+    await persistMutation({ kind: "deleteMany", previous }, () => `Deleted ${previous.length} templates.`, (result) => {
+      if (editorRef.current.selectedId && !result.templates.some((item) => item.id === editorRef.current.selectedId)) replaceEditor(EMPTY_EDITOR);
     });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `promptcrate-templates-${new Date().toISOString().slice(0, 10)}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
-    setStatus(`Exported ${templates.length} templates.`);
+  }
+
+  async function reorder(ids: string[], expected: PromptTemplate[]): Promise<void> {
+    await persistMutation({ kind: "reorder", ids, expected }, () => "Template order saved.", () => {});
+  }
+
+  function recoverBackup(backup: TemplateBackup): void {
+    importSequence.current += 1;
+    const recovered = parseTemplateBackup(backup.templates);
+    if (!recovered.templates.length) {
+      setError("No valid templates could be recovered. Export the backup to inspect it.");
+      return;
+    }
+    setPendingImport({ payload: createTemplateExportPayload(recovered.templates), expected: templatesRef.current });
+    setError(null);
+    setStatus(`Recovered ${recovered.templates.length} templates for preview; skipped ${recovered.skipped} invalid entries.`);
   }
 
   async function handleImportFile(event: ChangeEvent<HTMLInputElement>): Promise<void> {
@@ -367,31 +448,46 @@ function OptionsApp() {
       return;
     }
 
-    const rawJson = await file.text();
-    const parsed = parseTemplateImportJson(rawJson);
+    const request = ++importSequence.current;
+    const expected = templatesRef.current;
+    let parsed: ReturnType<typeof parseTemplateImportJson>;
+    try {
+      parsed = parseTemplateImportJson(await file.text());
+    } catch (error) {
+      if (request === importSequence.current) {
+        setError(getErrorMessage(error));
+        setStatus("Import failed.");
+      }
+      return;
+    }
+    if (request !== importSequence.current) return;
 
     if (!parsed.ok) {
-      setPendingImport(null);
       setError(parsed.error);
       setStatus("Import failed.");
       return;
     }
 
     setError(null);
-    setPendingImport(parsed.payload);
+    setPendingImport({ payload: parsed.payload, expected });
     setStatus(`${parsed.payload.templates.length} templates ready to import.`);
   }
 
-  async function applyPendingImport(mode: "merge" | "overwrite"): Promise<void> {
+  async function applyPendingImport(items: PromptTemplate[], mode: "merge" | "overwrite"): Promise<void> {
     if (!pendingImport) {
       return;
     }
+
+    if (items.length === 0 || !mayDiscardDraft()) return;
 
     if (mode === "overwrite" && !confirm(tr("Overwrite all existing templates?"))) {
       return;
     }
 
-    await persistMutation({ kind: "import", templates: pendingImport.templates, mode, expected: templates },
+    const importing = pendingImport;
+    // A file read started before this explicit application must not replace its preview mid-write.
+    importSequence.current += 1;
+    await persistMutation({ kind: "import", templates: items, mode, expected: pendingImport.expected },
       (result) => result.overwritten
         ? `Imported ${result.added} templates by overwrite.`
         : `Imported ${result.added} new and ${result.updated} updated templates.`,
@@ -400,7 +496,7 @@ function OptionsApp() {
         replaceEditor(selected
           ? { selectedId: selected.id, form: templateToForm(selected), baseline: selected }
           : EMPTY_EDITOR);
-        setPendingImport(null);
+        setPendingImport((current) => current === importing ? null : current);
       });
   }
 
@@ -443,7 +539,9 @@ function OptionsApp() {
           </button>
         </div>
 
-        <section className="preferences" aria-label={tr("Preferences")}>
+        <details className="preferences">
+          <summary>{tr("Preferences")}</summary>
+          <div className="preferences-controls">
           <label>
             <span>{tr("Language")}</span>
             <select value={language} disabled={languageSaving} onChange={(event) => void changeLanguage(event.target.value as LanguagePreference)}>
@@ -474,63 +572,29 @@ function OptionsApp() {
           <p className="muted">{tr("Variable values are saved only on this device after you opt in. Turning this off clears remembered values.")}</p>
           <button type="button" disabled={memorySaving} onClick={() => void updateVariableMemory()}>{tr("Clear remembered values")}</button>
           {preferencesError ? <p className="preference-error" role="status">{localizeText(preferencesError)}</p> : null}
-        </section>
+          </div>
+        </details>
 
-        <input
-          className="search"
-          type="search"
-          placeholder={tr("Search templates")}
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-        />
-
-        <div className="template-list">
-          {visibleTemplates.length === 0 ? (
-            <p className="muted">{tr("No templates.")}</p>
-          ) : (
-            visibleTemplates.map((template) => (
-              <button
-                className={
-                  template.id === selectedId ? "template-row selected" : "template-row"
-                }
-                key={template.id}
-                type="button"
-                disabled={saving}
-                onClick={() => selectTemplate(template)}
-              >
-                <span className="row-title">
-                  {template.isFavorite ? "* " : ""}
-                  {template.title}
-                </span>
-                <span className="row-tags">{template.tags.join(", ")}</span>
-              </button>
-            ))
-          )}
-        </div>
+        <TemplateLibrary templates={templates} selectedId={selectedId} saving={saving}
+          onSelect={selectTemplate} onDeleteMany={deleteMany} onExport={exportTemplates} onReorder={reorder} />
 
         <section className="import-export" aria-label={tr("Import and export")}>
-          <button type="button" onClick={exportTemplates}>
+          <button type="button" onClick={() => exportTemplates()}>
             {tr("Export JSON")}
           </button>
           <label className="file-button">
             {tr("Import JSON")}
             <input type="file" disabled={saving} accept="application/json" onChange={handleImportFile} />
           </label>
-          {pendingImport ? (
-            <div className="import-actions">
-              <button type="button" disabled={saving} onClick={() => void applyPendingImport("merge")}>
-                {tr("Merge")}
-              </button>
-              <button type="button" disabled={saving} onClick={() => void applyPendingImport("overwrite")}>
-                {tr("Overwrite")}
-              </button>
-            </div>
-          ) : null}
         </section>
       </aside>
 
       <section className="editor" aria-label={tr("Template editor")}>
-        <form onSubmit={(event) => void saveTemplate(event)}>
+        <LibraryHealth metadata={metadata} error={metadataError} saving={saving} onRecover={recoverBackup}
+          onExportBackup={(backup) => downloadJson(backup.templates, `promptcrate-backup-${backup.id.replace(/[^a-z0-9_.-]/gi, "_")}.json`)} />
+        {pendingImport ? <ImportPreview payload={pendingImport.payload} existing={templates} saving={saving}
+          onApply={applyPendingImport} onCancel={() => { importSequence.current += 1; setPendingImport(null); }} /> : null}
+        <form ref={formRef} onSubmit={(event) => void saveTemplate(event)}>
           <fieldset className="editor-fields" disabled={saving}>
           <div className="editor-header">
             <div>
@@ -630,6 +694,7 @@ function OptionsApp() {
             <label className="body-field">
               <span>{tr("Body")}</span>
               <textarea
+                aria-label={tr("Body")}
                 value={form.body}
                 onChange={(event) =>
                   setForm((currentForm) => ({
@@ -641,6 +706,7 @@ function OptionsApp() {
               />
             </label>
           </div>
+          <VariablePreview body={form.body} />
           </fieldset>
         </form>
       </section>
@@ -656,6 +722,19 @@ function templateToForm(template: PromptTemplate): TemplateFormState {
     tags: template.tags.join(", "),
     isFavorite: template.isFavorite,
   };
+}
+
+function isEditorDirty(editor: EditorState): boolean {
+  return JSON.stringify(editor.form) !== JSON.stringify(editor.baseline ? templateToForm(editor.baseline) : EMPTY_FORM);
+}
+
+function downloadJson(value: unknown, filename: string): void {
+  const url = URL.createObjectURL(new Blob([`${JSON.stringify(value, null, 2)}\n`], { type: "application/json" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function splitTags(tags: string): string[] {
@@ -733,10 +812,11 @@ const OPTIONS_STYLES = `
 
   .sidebar {
     display: grid;
-    grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+    grid-template-rows: auto auto minmax(min-content, 1fr) auto;
     gap: 12px;
     min-height: 0;
     height: 100vh;
+    overflow-y: auto;
     padding: 18px;
     border-right: 1px solid var(--pc-divider);
     background: var(--pc-surface);
@@ -853,11 +933,12 @@ const OPTIONS_STYLES = `
   }
 
   .preferences {
-    display: grid;
-    gap: 8px;
     padding-bottom: 12px;
     border-bottom: 1px solid var(--pc-divider);
   }
+
+  .preferences summary { cursor: pointer; font-size: 12px; font-weight: 700; padding: 6px 0; }
+  .preferences-controls { display: grid; gap: 8px; padding-top: 10px; }
 
   .preferences button {
     min-height: 34px;

@@ -36,6 +36,39 @@ afterEach(() => {
 });
 
 describe("background template RPC", () => {
+  it("reads library metadata without initializing corrupt templates", async () => {
+    const worker = await setupWorker();
+    worker.data()[STORAGE_KEYS.templates] = { broken: true };
+    worker.data()[STORAGE_KEYS.invalidTemplatesBackup] = {
+      reason: "Old failure", backedUpAt: "2026-11-09T00:00:00.000Z", templates: ["old"],
+    };
+    const response = vi.fn();
+    expect(worker.listener({ type: MESSAGE_TYPE.READ_LIBRARY_METADATA }, {}, response)).toBe(true);
+    await vi.waitFor(() => expect(response).toHaveBeenCalledOnce());
+    expect(response.mock.calls[0][0]).toEqual({ ok: true, metadata: {
+      bytesInUse: null, quotaBytes: 10485760, backups: [expect.objectContaining({ templates: ["old"] })],
+    } });
+    expect(worker.set).not.toHaveBeenCalled();
+    expect(worker.data()[STORAGE_KEYS.templates]).toEqual({ broken: true });
+  });
+
+  it("supports validated bulk and reorder mutations through the same RPC", async () => {
+    const worker = await setupWorker();
+    const first = { id: "first", title: "First", body: "Hello", tags: [], isFavorite: false,
+      createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+    const second = { ...first, id: "second", title: "Second" };
+    worker.data()[STORAGE_KEYS.templates] = [first, second];
+    const reordered = vi.fn();
+    expect(worker.listener({ type: MESSAGE_TYPE.MUTATE_TEMPLATES,
+      mutation: { kind: "reorder", ids: [second.id, first.id], expected: [first, second] },
+    }, {}, reordered)).toBe(true);
+    await vi.waitFor(() => expect(reordered).toHaveBeenCalledExactlyOnceWith({ ok: true, templates: [second, first] }));
+    const deleted = vi.fn();
+    expect(worker.listener({ type: MESSAGE_TYPE.MUTATE_TEMPLATES,
+      mutation: { kind: "deleteMany", previous: [first, second] },
+    }, {}, deleted)).toBe(true);
+    await vi.waitFor(() => expect(deleted).toHaveBeenCalledExactlyOnceWith({ ok: true, templates: [] }));
+  });
   it("validates variable memory payloads and keeps async responses open", async () => {
     const worker = await setupWorker();
     for (const payload of [

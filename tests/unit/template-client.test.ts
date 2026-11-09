@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { commitTemplateMutation, loadPromptTemplates } from "../../src/shared/template-client";
+import { commitTemplateMutation, loadLibraryMetadata, loadPromptTemplates } from "../../src/shared/template-client";
 import { MESSAGE_TYPE } from "../../src/shared/message-contract";
 import type { PromptTemplate } from "../../src/shared/templates";
 
@@ -11,6 +11,33 @@ const template: PromptTemplate = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("template storage client", () => {
+  it("reads usage and raw recovery snapshots through the background request", async () => {
+    const metadata = { bytesInUse: 2048, quotaBytes: 10485760, backups: [
+      { id: "backup", reason: "Invalid data", backedUpAt: "2026-11-09T00:00:00.000Z", templates: { broken: true } },
+    ] };
+    const sendMessage = vi.fn().mockResolvedValue({ ok: true, metadata });
+    vi.stubGlobal("chrome", { runtime: { sendMessage } });
+    expect(await loadLibraryMetadata()).toEqual(metadata);
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith({ type: MESSAGE_TYPE.READ_LIBRARY_METADATA });
+  });
+
+  it.each([
+    undefined, { ok: true }, { ok: true, metadata: {} },
+    { ok: true, metadata: { bytesInUse: -1, quotaBytes: null, backups: [] } },
+    { ok: true, metadata: { bytesInUse: null, quotaBytes: 0, backups: [] } },
+    { ok: true, metadata: { bytesInUse: null, quotaBytes: null, backups: [{ id: "bad" }] } },
+  ])("rejects malformed library metadata: %j", async (response) => {
+    vi.stubGlobal("chrome", { runtime: { sendMessage: vi.fn().mockResolvedValue(response) } });
+    await expect(loadLibraryMetadata()).rejects.toThrow("Invalid response from library metadata storage.");
+  });
+
+  it("allows unknown usage and surfaces a metadata storage error", async () => {
+    vi.stubGlobal("chrome", { runtime: { sendMessage: vi.fn()
+      .mockResolvedValueOnce({ ok: true, metadata: { bytesInUse: null, quotaBytes: null, backups: [] } })
+      .mockResolvedValueOnce({ ok: false, error: "Metadata failed" }) } });
+    expect(await loadLibraryMetadata()).toEqual({ bytesInUse: null, quotaBytes: null, backups: [] });
+    await expect(loadLibraryMetadata()).rejects.toThrow("Metadata failed");
+  });
   it("loads templates through the background request", async () => {
     const sendMessage = vi.fn().mockResolvedValue({ ok: true, templates: [template] });
     vi.stubGlobal("chrome", { runtime: { sendMessage } });

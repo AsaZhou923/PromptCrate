@@ -614,5 +614,276 @@
   },
   "default_translate_polish_tags": {
     "message": "translation,writing"
+  },
+  "discard_unsaved_changes": {
+    "message": "Discard unsaved changes?"
+  },
+  "delete_selected_confirm": {
+    "message": "Delete $VALUE1$ selected templates?",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "deleted_templates": {
+    "message": "Deleted $VALUE1$ templates.",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "template_order_saved": {
+    "message": "Template order saved."
+  },
+  "recovery_no_valid_templates": {
+    "message": "No valid templates could be recovered. Export the backup to inspect it."
+  },
+  "recovery_preview_result": {
+    "message": "Recovered $VALUE1$ templates for preview; skipped $VALUE2$ invalid entries.",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      },
+      "value2": {
+        "content": "$2"
+      }
+    }
+  },
+  "load_library_details_failed": {
+    "message": "Could not load library details. $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "template_library": {
+    "message": "Template library"
+  },
+  "filter_tags_match_all": {
+    "message": "Filter by tags (match all)"
+  },
+  "clear_tag_filters": {
+    "message": "Clear tag filters"
+  },
+  "sort_templates": {
+    "message": "Sort templates"
+  },
+  "sort_recommended": {
+    "message": "Recommended"
+  },
+  "sort_manual": {
+    "message": "Manual order"
+  },
+  "sort_recently_updated": {
+    "message": "Recently updated"
+  },
+  "reorder_clear_filters": {
+    "message": "Clear search and tag filters to reorder templates."
+  },
+  "reorder_instructions": {
+    "message": "Drag the reorder handle or use Move up and Move down. This changes the Options list order."
+  },
+  "bulk_actions": {
+    "message": "Bulk actions"
+  },
+  "selected_count": {
+    "message": "$VALUE1$ selected",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "select_visible": {
+    "message": "Select visible"
+  },
+  "clear_selection": {
+    "message": "Clear selection"
+  },
+  "export_selected": {
+    "message": "Export selected"
+  },
+  "delete_selected": {
+    "message": "Delete selected"
+  },
+  "select_template": {
+    "message": "Select \"$VALUE1$\"",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "reorder_template": {
+    "message": "Reorder \"$VALUE1$\"",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "move_template_up": {
+    "message": "Move \"$VALUE1$\" up",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "move_template_down": {
+    "message": "Move \"$VALUE1$\" down",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "move_up": {
+    "message": "Move up"
+  },
+  "move_down": {
+    "message": "Move down"
+  },
+  "import_preview": {
+    "message": "Import preview"
+  },
+  "cancel_import": {
+    "message": "Cancel import"
+  },
+  "import_preview_counts": {
+    "message": "New: $VALUE1$ · Replace: $VALUE2$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      },
+      "value2": {
+        "content": "$2"
+      }
+    }
+  },
+  "select_all_imports": {
+    "message": "Select all imports"
+  },
+  "clear_import_selection": {
+    "message": "Clear import selection"
+  },
+  "import_template": {
+    "message": "Import \"$VALUE1$\"",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "replace_existing": {
+    "message": "Replace existing"
+  },
+  "no_templates_to_import": {
+    "message": "No templates to import."
+  },
+  "import_mode_explanation": {
+    "message": "Merge keeps other templates. Overwrite replaces the entire library with only the selected imports."
+  },
+  "library_storage_recovery": {
+    "message": "Library storage and recovery"
+  },
+  "storage": {
+    "message": "Storage"
+  },
+  "storage_usage_with_quota": {
+    "message": "$VALUE1$ MiB of $VALUE2$ MiB used ($VALUE3$%).",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      },
+      "value2": {
+        "content": "$2"
+      },
+      "value3": {
+        "content": "$3"
+      }
+    }
+  },
+  "storage_usage_without_quota": {
+    "message": "$VALUE1$ MiB used.",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "storage_usage_unavailable": {
+    "message": "Storage usage unavailable."
+  },
+  "storage_almost_full": {
+    "message": "Storage is almost full. Export a backup and remove templates you no longer need."
+  },
+  "saved_recovery_backups": {
+    "message": "Saved recovery backups"
+  },
+  "recovery_backups_explanation": {
+    "message": "Older template data was backed up after a storage problem. Export it or preview recoverable templates before restoring."
+  },
+  "export_backup": {
+    "message": "Export backup"
+  },
+  "try_recovery": {
+    "message": "Try recovery"
+  },
+  "template_preview": {
+    "message": "Template preview"
+  },
+  "variables": {
+    "message": "Variables"
+  },
+  "required": {
+    "message": "Required"
+  },
+  "optional_label": {
+    "message": "Optional"
+  },
+  "no_variables_detected": {
+    "message": "No variables detected."
+  },
+  "preview_value": {
+    "message": "Preview value: $VALUE1$",
+    "placeholders": {
+      "value1": {
+        "content": "$1"
+      }
+    }
+  },
+  "preview_values_explanation": {
+    "message": "Preview values are examples and are not saved. Built-in values use sample page information."
+  },
+  "example_page": {
+    "message": "Example page"
+  },
+  "example_selected_text": {
+    "message": "Example selected text"
+  },
+  "invalid_import_container": {
+    "message": "Import file must contain an object or array."
+  },
+  "selected_templates_delete_conflict": {
+    "message": "Selected templates changed or were deleted in another tab. Reselect them before deleting."
+  },
+  "template_reorder_conflict": {
+    "message": "Templates changed in another tab. Reload the latest templates before reordering."
+  },
+  "invalid_template_order": {
+    "message": "Template order must contain every current template exactly once."
+  },
+  "invalid_storage_usage_response": {
+    "message": "Invalid storage usage response."
+  },
+  "invalid_library_metadata_response": {
+    "message": "Invalid response from library metadata storage."
+  },
+  "invalid_stored_templates": {
+    "message": "Stored templates are not valid PromptCrate templates."
   }
 }

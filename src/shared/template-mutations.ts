@@ -10,6 +10,8 @@ import { applyTemplateImport } from "./import-export";
 export type TemplateMutation =
   | { kind: "save"; template: PromptTemplate; previous: PromptTemplate | null; autoId?: string }
   | { kind: "delete"; previous: PromptTemplate }
+  | { kind: "deleteMany"; previous: PromptTemplate[] }
+  | { kind: "reorder"; ids: string[]; expected: PromptTemplate[] }
   | { kind: "import"; templates: PromptTemplate[]; mode: "merge" | "overwrite"; expected: PromptTemplate[] }
   | { kind: "touch"; id: string };
 
@@ -46,6 +48,11 @@ export function isTemplateMutation(value: unknown): value is TemplateMutation {
         (mutation.autoId === undefined || (typeof mutation.autoId === "string" && mutation.autoId.trim().length > 0));
     case "delete":
       return isPromptTemplate(mutation.previous);
+    case "deleteMany":
+      return isTemplateArray(mutation.previous) && mutation.previous.length > 0;
+    case "reorder":
+      return Array.isArray(mutation.ids) && mutation.ids.every((id) => typeof id === "string") &&
+        isTemplateArray(mutation.expected);
     case "import":
       return isTemplateArray(mutation.templates) && isTemplateArray(mutation.expected) &&
         (mutation.mode === "merge" || mutation.mode === "overwrite");
@@ -94,6 +101,22 @@ export function applyTemplateMutation(
       }
       return { templates: current.filter((item) => item.id !== mutation.previous.id) };
     }
+    case "deleteMany": {
+      const currentById = new Map(current.map((item) => [item.id, item]));
+      if (mutation.previous.some((previous) => !sameTemplateRevision(currentById.get(previous.id), previous))) {
+        throw new Error("Selected templates changed or were deleted in another tab. Reselect them before deleting.");
+      }
+      const removed = new Set(mutation.previous.map((previous) => previous.id));
+      return { templates: current.filter((item) => !removed.has(item.id)) };
+    }
+    case "reorder": {
+      if (current.length !== mutation.expected.length || current.some((item, index) =>
+        item.id !== mutation.expected[index].id || !sameTemplateRevision(item, mutation.expected[index]))) {
+        throw new Error("Templates changed in another tab. Reload the latest templates before reordering.");
+      }
+      const currentById = new Map(current.map((item) => [item.id, item]));
+      return { templates: mutation.ids.map((id) => currentById.get(id)!) };
+    }
     case "import": {
       const imported = validateTemplates(mutation.templates);
       const currentById = new Map(current.map((item) => [item.id, item]));
@@ -135,6 +158,18 @@ export function validateTemplateMutation(mutation: unknown): asserts mutation is
     case "delete":
       validateTemplates([mutation.previous]);
       break;
+    case "deleteMany":
+      validateTemplates(mutation.previous);
+      break;
+    case "reorder": {
+      validateTemplates(mutation.expected);
+      const expectedIds = new Set(mutation.expected.map((item) => item.id));
+      if (mutation.ids.length !== mutation.expected.length || new Set(mutation.ids).size !== mutation.ids.length ||
+        mutation.ids.some((id) => !expectedIds.has(id))) {
+        throw new Error("Template order must contain every current template exactly once.");
+      }
+      break;
+    }
     case "import":
       validateTemplates(mutation.templates);
       validateTemplates(mutation.expected);

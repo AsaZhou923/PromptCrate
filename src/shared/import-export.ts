@@ -1,6 +1,5 @@
 import {
   findDuplicateTemplateIds,
-  isPromptTemplate,
   normalizeTemplate,
   PromptTemplate,
   STORAGE_SCHEMA_VERSION,
@@ -50,7 +49,10 @@ export function stringifyTemplateExport(
   return `${JSON.stringify(createTemplateExportPayload(templates, now), null, 2)}\n`;
 }
 
-export function parseTemplateImportJson(rawJson: string): ImportParseResult {
+export function parseTemplateImportJson(
+  rawJson: string,
+  now = new Date().toISOString(),
+): ImportParseResult {
   let parsed: unknown;
 
   try {
@@ -65,13 +67,13 @@ export function parseTemplateImportJson(rawJson: string): ImportParseResult {
   if (typeof parsed !== "object" || parsed === null) {
     return {
       ok: false,
-      error: "Import file must contain an object.",
+      error: "Import file must contain an object or array.",
     };
   }
 
-  const payload = parsed as TemplateExportPayload;
+  const payload: Record<string, unknown> = Array.isArray(parsed) ? { templates: parsed } : parsed as Record<string, unknown>;
 
-  if (payload.schemaVersion !== STORAGE_SCHEMA_VERSION) {
+  if (Object.hasOwn(payload, "schemaVersion") && payload.schemaVersion !== STORAGE_SCHEMA_VERSION) {
     return {
       ok: false,
       error: `Unsupported schemaVersion: ${String(payload.schemaVersion)}.`,
@@ -86,27 +88,21 @@ export function parseTemplateImportJson(rawJson: string): ImportParseResult {
   }
 
   const normalizedTemplates: PromptTemplate[] = [];
+  const reservedIds = collectExplicitIds(payload.templates);
 
   for (const template of payload.templates) {
-    if (!isPromptTemplate(template)) {
+    const normalized = normalizeImportedTemplate(template, now);
+    if (!normalized) {
       return {
         ok: false,
         error: `Template at index ${normalizedTemplates.length + 1} is invalid.`,
       };
     }
 
-    normalizedTemplates.push(normalizeTemplate(template));
-  }
-
-  const invalidIndex = normalizedTemplates.findIndex(
-    (template) => validateTemplate(template).length > 0,
-  );
-
-  if (invalidIndex !== -1) {
-    return {
-      ok: false,
-      error: `Template at index ${invalidIndex + 1} is invalid.`,
-    };
+    if (!hasExplicitId(template)) {
+      normalized.id = allocateTemplateId(normalized.title, reservedIds);
+    }
+    normalizedTemplates.push(normalized);
   }
 
   const duplicateIds = findDuplicateTemplateIds(normalizedTemplates);
@@ -121,13 +117,84 @@ export function parseTemplateImportJson(rawJson: string): ImportParseResult {
   return {
     ok: true,
     payload: {
-      schemaVersion: payload.schemaVersion,
-      exportedAt: typeof payload.exportedAt === "string"
+      schemaVersion: STORAGE_SCHEMA_VERSION,
+      exportedAt: isTimestamp(payload.exportedAt)
         ? payload.exportedAt
-        : new Date().toISOString(),
+        : now,
       templates: normalizedTemplates,
     },
   };
+}
+
+/** Salvage valid entries without changing storage or discarding the raw backup. */
+export function parseTemplateBackup(
+  templatesUnknown: unknown,
+  now = new Date().toISOString(),
+): { templates: PromptTemplate[]; skipped: number } {
+  if (!Array.isArray(templatesUnknown)) return { templates: [], skipped: 1 };
+  const reservedIds = collectExplicitIds(templatesUnknown);
+  const seen = new Set<string>();
+  const templates: PromptTemplate[] = [];
+  let skipped = 0;
+  for (const candidate of templatesUnknown) {
+    const normalized = normalizeImportedTemplate(candidate, now);
+    if (!normalized || (seen.has(normalized.id) && hasExplicitId(candidate))) {
+      skipped += 1;
+      continue;
+    }
+    if (!hasExplicitId(candidate)) {
+      normalized.id = allocateTemplateId(normalized.title, reservedIds);
+    }
+    seen.add(normalized.id);
+    templates.push(normalized);
+  }
+  return { templates, skipped };
+}
+
+function normalizeImportedTemplate(value: unknown, now: string): PromptTemplate | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const entry = value as Record<string, unknown>;
+  if (!Object.hasOwn(entry, "title") || typeof entry.title !== "string" ||
+    !Object.hasOwn(entry, "body") || typeof entry.body !== "string") return null;
+  if ((Object.hasOwn(entry, "id") && typeof entry.id !== "string") ||
+    (Object.hasOwn(entry, "isFavorite") && typeof entry.isFavorite !== "boolean") ||
+    (Object.hasOwn(entry, "tags") && (!Array.isArray(entry.tags) || !entry.tags.every((tag) => typeof tag === "string"))) ||
+    ["createdAt", "updatedAt", "lastUsedAt"].some((field) => Object.hasOwn(entry, field) && !isTimestamp(entry[field]))) {
+    return null;
+  }
+  const template = normalizeTemplate({
+    id: Object.hasOwn(entry, "id") ? entry.id as string : "template",
+    title: entry.title,
+    body: entry.body,
+    tags: Object.hasOwn(entry, "tags") ? entry.tags as string[] : [],
+    isFavorite: Object.hasOwn(entry, "isFavorite") ? entry.isFavorite as boolean : false,
+    createdAt: Object.hasOwn(entry, "createdAt") ? entry.createdAt as string : now,
+    updatedAt: Object.hasOwn(entry, "updatedAt") ? entry.updatedAt as string : now,
+    ...(Object.hasOwn(entry, "lastUsedAt") ? { lastUsedAt: entry.lastUsedAt as string } : {}),
+  }, Object.hasOwn(entry, "updatedAt") ? entry.updatedAt as string : now);
+  return validateTemplate(template).length === 0 ? template : null;
+}
+
+function isTimestamp(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && Number.isFinite(Date.parse(value));
+}
+
+function collectExplicitIds(entries: unknown[]): Set<string> {
+  return new Set(entries.flatMap((entry) => typeof entry === "object" && entry !== null &&
+    Object.hasOwn(entry, "id") && "id" in entry && typeof entry.id === "string" ? [entry.id.trim()] : []));
+}
+
+function hasExplicitId(value: unknown): boolean {
+  return typeof value === "object" && value !== null && Object.hasOwn(value, "id");
+}
+
+function allocateTemplateId(title: string, reservedIds: Set<string>): string {
+  const base = title.toLocaleLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "template";
+  let id = base;
+  let suffix = 2;
+  while (reservedIds.has(id)) id = `${base}-${suffix++}`;
+  reservedIds.add(id);
+  return id;
 }
 
 export function applyTemplateImport(

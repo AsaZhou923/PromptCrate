@@ -30,6 +30,11 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
       .catch((error: unknown) => sendResponse({ ok: false, error: getErrorMessage(error) }));
     return true;
   }
+  if (message.type === MESSAGE_TYPE.READ_LIBRARY_METADATA) {
+    void templateStore.readLibraryMetadata().then((metadata) => sendResponse({ ok: true, metadata }))
+      .catch((error: unknown) => sendResponse({ ok: false, error: getErrorMessage(error) }));
+    return true;
+  }
   if (message.type === MESSAGE_TYPE.MUTATE_TEMPLATES) {
     const mutation = "mutation" in message ? message.mutation : undefined;
     if (!isTemplateMutation(mutation)) {
