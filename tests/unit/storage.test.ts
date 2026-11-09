@@ -78,6 +78,7 @@ describe("storage initialization", () => {
     expect(store.templates).toHaveLength(7);
     expect(storage.data[STORAGE_KEYS.templates]).toEqual(store.templates);
     expect(storage.data[STORAGE_KEYS.invalidTemplatesBackup]).toEqual({
+      id: "backup-2026-06-02T00:00:00.000Z",
       reason: "Template at index 1 is invalid.",
       backedUpAt: "2026-06-02T00:00:00.000Z",
       templates: [invalidTemplate],
@@ -109,6 +110,7 @@ describe("storage initialization", () => {
 
     expect(store.templates).toHaveLength(7);
     expect(storage.data[STORAGE_KEYS.invalidTemplatesBackup]).toEqual({
+      id: "backup-2026-06-02T00:00:00.000Z",
       reason: "Duplicate template id: custom.",
       backedUpAt: "2026-06-02T00:00:00.000Z",
       templates: [

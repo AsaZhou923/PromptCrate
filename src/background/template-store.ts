@@ -1,6 +1,7 @@
 import {
   getChromeLocalStorage,
   readPromptTemplates,
+  readLibraryMetadata,
   type StorageAreaLike,
   writePromptTemplates,
 } from "../shared/storage";
@@ -21,6 +22,9 @@ export function createTemplateStore(storage: StorageAreaLike = getChromeLocalSto
   return {
     read() {
       return enqueue(() => readPromptTemplates(storage));
+    },
+    readLibraryMetadata() {
+      return enqueue(() => readLibraryMetadata(storage));
     },
     mutate(mutation: TemplateMutation) {
       return enqueue(async () => {

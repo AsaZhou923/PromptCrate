@@ -129,6 +129,7 @@ test("menu placement stays near its target and themes follow preference and syst
   const app = await launchPromptCrate(testInfo.outputPath("profile-placement-theme"));
   try {
     const options = await resetExtensionStorage(app.extensionId, app.context);
+    await openPreferences(options);
     await options.getByRole("combobox", { name: /Theme/ }).selectOption("dark");
     await expect(options.locator("html")).toHaveAttribute("data-theme", "dark");
     const optionsScreenshot = testInfo.outputPath("options-dark.png");
@@ -184,7 +185,8 @@ test("menu placement stays near its target and themes follow preference and syst
       chrome.commands.getAll = (async () => [{ name: "open-prompt-menu", shortcut: "" }]) as typeof chrome.commands.getAll;
     });
     await options.reload();
-    await expect(options.getByRole("region", { name: "Preferences" })).toContainText("Shortcut not assigned");
+    await openPreferences(options);
+    await expect(options.locator("details.preferences")).toContainText("Shortcut not assigned");
     const created = app.context.waitForEvent("page");
     await options.getByRole("button", { name: "Configure shortcut", exact: true }).click();
     const shortcuts = await created;
@@ -229,8 +231,8 @@ test("page scripts cannot read, reopen, or synthetically operate the private men
   try {
     const options = await resetExtensionStorage(app.extensionId, app.context);
     await options.getByRole("button", { name: "New", exact: true }).click();
-    await options.getByLabel("Title").fill("Private trigger");
-    await options.getByLabel("Body").fill("PRIVATE TEMPLATE: {{value}}");
+    await options.getByLabel("Title", { exact: true }).fill("Private trigger");
+    await options.getByLabel("Body", { exact: true }).fill("PRIVATE TEMPLATE: {{value}}");
     await options.getByRole("button", { name: "Save", exact: true }).click();
     await expect(options.locator(".status")).toContainText('Saved "Private trigger".');
     const page = await app.context.newPage();
@@ -878,14 +880,14 @@ test("Options tabs preserve unrelated edits, report conflicts, and keep drafts a
     await second.goto(`chrome-extension://${app.extensionId}/options.html`);
     await expect(second.locator(".status")).toContainText("templates loaded.");
     await second.getByRole("button", { name: /Compare options/ }).click();
-    await second.getByLabel("Body").fill("Pending draft from tab two");
+    await second.getByLabel("Body", { exact: true }).fill("Pending draft from tab two");
     await first.getByRole("button", { name: "New", exact: true }).click();
-    await first.getByLabel("Title").fill("Created in tab one");
-    await first.getByLabel("Body").fill("Body from tab one");
+    await first.getByLabel("Title", { exact: true }).fill("Created in tab one");
+    await first.getByLabel("Body", { exact: true }).fill("Body from tab one");
     await first.getByRole("button", { name: "Save", exact: true }).click();
     await expect(first.locator(".status")).toContainText('Saved "Created in tab one".');
     await expect(second.getByRole("button", { name: /Created in tab one/ })).toBeVisible();
-    await expect(second.getByLabel("Body")).toHaveValue("Pending draft from tab two");
+    await expect(second.getByLabel("Body", { exact: true })).toHaveValue("Pending draft from tab two");
     await second.getByRole("button", { name: "Save", exact: true }).click();
     await expect(second.locator(".status")).toContainText('Saved "Compare options".');
     expect((await readTemplates(second)).find((item) => item.id === "created-in-tab-one")?.body).toBe("Body from tab one");
@@ -893,12 +895,12 @@ test("Options tabs preserve unrelated edits, report conflicts, and keep drafts a
     for (const tab of [first, second]) {
       await tab.getByRole("button", { name: /Rewrite clearer/ }).click();
     }
-    await second.getByLabel("Body").fill("Unsaved conflicting draft");
-    await first.getByLabel("Body").fill("Newer stored revision");
+    await second.getByLabel("Body", { exact: true }).fill("Unsaved conflicting draft");
+    await first.getByLabel("Body", { exact: true }).fill("Newer stored revision");
     await first.getByRole("button", { name: "Save", exact: true }).click();
     await expect(first.locator(".status")).toContainText('Saved "Rewrite clearer".');
     await expect(second.locator(".status.error")).toContainText("another tab");
-    await expect(second.getByLabel("Body")).toHaveValue("Unsaved conflicting draft");
+    await expect(second.getByLabel("Body", { exact: true })).toHaveValue("Unsaved conflicting draft");
     await second.getByRole("button", { name: "Save", exact: true }).click();
     await expect(second.locator(".status.error")).toContainText("another tab");
     expect((await readTemplates(second)).find((item) => item.id === "rewrite-clearer")?.body).toBe("Newer stored revision");
@@ -906,7 +908,7 @@ test("Options tabs preserve unrelated edits, report conflicts, and keep drafts a
     await second.screenshot({ path: screenshotPath, fullPage: true });
     await testInfo.attach("options-conflict", { path: screenshotPath, contentType: "image/png" });
     await second.getByRole("button", { name: "Keep as new", exact: true }).click();
-    await expect(second.getByLabel("Body")).toHaveValue("Unsaved conflicting draft");
+    await expect(second.getByLabel("Body", { exact: true })).toHaveValue("Unsaved conflicting draft");
     await second.getByRole("button", { name: "Save", exact: true }).click();
     await expect(second.locator(".status")).toContainText('Saved "Rewrite clearer".');
     await expect(second.getByLabel("ID", { exact: true })).toHaveValue("rewrite-clearer-2");
@@ -914,8 +916,8 @@ test("Options tabs preserve unrelated edits, report conflicts, and keep drafts a
 
     for (const tab of [first, second]) {
       await tab.getByRole("button", { name: "New", exact: true }).click();
-      await tab.getByLabel("Title").fill("Concurrent new");
-      await tab.getByLabel("Body").fill("Concurrent body");
+      await tab.getByLabel("Title", { exact: true }).fill("Concurrent new");
+      await tab.getByLabel("Body", { exact: true }).fill("Concurrent body");
     }
     await Promise.all([first, second].map((tab) => tab.getByRole("button", { name: "Save", exact: true }).click()));
     for (const tab of [first, second]) {
@@ -927,12 +929,12 @@ test("Options tabs preserve unrelated edits, report conflicts, and keep drafts a
     for (const tab of [first, second]) {
       await tab.getByRole("button", { name: /Draft reply/ }).click();
     }
-    await second.getByLabel("Body").fill("Keep this deleted template draft");
+    await second.getByLabel("Body", { exact: true }).fill("Keep this deleted template draft");
     first.once("dialog", (dialog) => void dialog.accept());
     await first.getByRole("button", { name: "Delete", exact: true }).click();
     await expect(first.locator(".status")).toContainText('Deleted "Draft reply".');
     await expect(second.locator(".status.error")).toContainText("deleted");
-    await expect(second.getByLabel("Body")).toHaveValue("Keep this deleted template draft");
+    await expect(second.getByLabel("Body", { exact: true })).toHaveValue("Keep this deleted template draft");
     await second.getByRole("button", { name: "Save", exact: true }).click();
     await expect(second.locator(".status.error")).toContainText("deleted");
     expect((await readTemplates(second)).some((item) => item.id === "draft-reply")).toBe(false);
@@ -948,7 +950,7 @@ test("usage updates preserve pending Options drafts and survive the next save", 
     const options = await resetExtensionStorage(app.extensionId, app.context);
     const before = (await readTemplates(options)).find((item) => item.id === "rewrite-clearer")!;
     await options.getByRole("button", { name: /Rewrite clearer/ }).click();
-    await options.getByLabel("Body").fill("My pending rewrite for {{text}}");
+    await options.getByLabel("Body", { exact: true }).fill("My pending rewrite for {{text}}");
     const page = await app.context.newPage();
     await page.goto(`${staticServer.baseURL}/fixtures/manual-inputs.html`);
     await page.locator("#textarea").focus();
@@ -957,7 +959,7 @@ test("usage updates preserve pending Options drafts and survive the next save", 
     await expect.poll(async () => (await readTemplates(options)).find((item) => item.id === before.id)?.lastUsedAt).toBeTruthy();
     const used = (await readTemplates(options)).find((item) => item.id === before.id)!;
     expect(used.updatedAt).toBe(before.updatedAt);
-    await expect(options.getByLabel("Body")).toHaveValue("My pending rewrite for {{text}}");
+    await expect(options.getByLabel("Body", { exact: true })).toHaveValue("My pending rewrite for {{text}}");
     await expect(options.locator(".status.error")).toHaveCount(0);
     await options.getByRole("button", { name: "Save", exact: true }).click();
     await expect(options.locator(".status")).toContainText('Saved "Rewrite clearer".');
@@ -1045,7 +1047,7 @@ test("menu refresh preserves search and variable focus and catches load failures
     await menu.getByLabel("option_b", { exact: true }).fill("Second draft");
     const active = await menu.getByLabel("option_b", { exact: true }).elementHandle();
     await options.getByRole("button", { name: /Summarize page/ }).click();
-    await options.getByLabel("Body").fill("Updated summary body");
+    await options.getByLabel("Body", { exact: true }).fill("Updated summary body");
     await options.getByRole("button", { name: "Save", exact: true }).click();
     await expect(options.locator(".status")).toContainText('Saved "Summarize page".');
     expect(await active!.evaluate((node) => node.isConnected)).toBe(true);
@@ -1097,7 +1099,7 @@ test("Options saves favorites through the form and preserves unsaved edits on fa
     const originalBody = (await saved())!.body;
     await expect(options.getByRole("button", { name: /^(Unfavorite|Favorite)$/ })).toHaveCount(0);
     await favorite.check();
-    await options.getByLabel("Body").fill("Draft a reply to {{message}}.\nTone: {{tone?}}");
+    await options.getByLabel("Body", { exact: true }).fill("Draft a reply to {{message}}.\nTone: {{tone?}}");
     expect((await saved())!.isFavorite).toBe(false);
     expect((await saved())!.body).toBe(originalBody);
 
@@ -1112,7 +1114,7 @@ test("Options saves favorites through the form and preserves unsaved edits on fa
     await options.getByRole("button", { name: "Save", exact: true }).click();
     await expect(options.locator(".status.error")).toContainText("Test save failure");
     await expect(favorite).toBeChecked();
-    await expect(options.getByLabel("Body")).toHaveValue("Draft a reply to {{message}}.\nTone: {{tone?}}");
+    await expect(options.getByLabel("Body", { exact: true })).toHaveValue("Draft a reply to {{message}}.\nTone: {{tone?}}");
     expect((await saved())!.isFavorite).toBe(false);
 
     await options.evaluate(() => window.dispatchEvent(new Event("promptcrate:test-restore-save")));
@@ -1186,6 +1188,7 @@ test("Options generates unique automatic IDs and splits Chinese tag punctuation"
     // Non-Latin titles can fall back to the same timestamp; generated IDs still need deduplication.
     await options.evaluate(() => { Date.now = () => 1_793_318_400_000; });
     for (const suffix of ["", "-2"]) {
+      if (suffix === "") options.once("dialog", (dialog) => { void dialog.accept(); });
       await options.getByRole("button", { name: "New", exact: true }).click();
       await options.getByLabel("Title", { exact: true }).fill("翻译模板");
       await options.getByLabel("Body", { exact: true }).fill("Translate {{text}}");
@@ -1215,16 +1218,16 @@ test("manages templates through Options CRUD, import, export, and persistence", 
     await expect(options.locator(".status")).toContainText("7 templates loaded.");
 
     await options.getByRole("button", { name: "New" }).click();
-    await options.getByLabel("ID").fill("empty-check");
+    await options.getByLabel("ID", { exact: true }).fill("empty-check");
     await options.getByRole("button", { name: "Save" }).click();
     await expect(options.locator(".status")).toContainText("Title is required.");
     await expect(options.locator(".status")).toContainText("Body is required.");
     await expect.poll(() => readTemplates(options).then((items) => items.length)).toBe(7);
 
-    await options.getByLabel("ID").fill("e2e-insert-template");
-    await options.getByLabel("Title").fill("E2E Insert Template");
-    await options.getByLabel("Tags").fill("e2e, playwright");
-    await options.getByLabel("Body").fill("E2E body for {{name}}");
+    await options.getByLabel("ID", { exact: true }).fill("e2e-insert-template");
+    await options.getByLabel("Title", { exact: true }).fill("E2E Insert Template");
+    await options.getByLabel("Tags", { exact: true }).fill("e2e, playwright");
+    await options.getByLabel("Body", { exact: true }).fill("E2E body for {{name}}");
     await options.getByRole("button", { name: "Save" }).click();
     await expect(options.locator(".status")).toContainText('Saved "E2E Insert Template".');
     await expect.poll(() => readTemplates(options).then((items) => items.length)).toBe(8);
@@ -1234,18 +1237,18 @@ test("manages templates through Options CRUD, import, export, and persistence", 
     await expect(options.locator(".status")).toContainText('Saved "E2E Insert Template".');
     await expect(options.locator(".template-row").first()).toContainText("* E2E Insert Template");
 
-    await options.getByLabel("Body").fill("E2E edited body for {{name}}");
+    await options.getByLabel("Body", { exact: true }).fill("E2E edited body for {{name}}");
     await options.getByRole("button", { name: "Save" }).click();
     await expect(options.locator(".status")).toContainText('Saved "E2E Insert Template".');
 
     await options.getByRole("button", { name: "Copy" }).click();
     await expect(options.locator(".status")).toContainText('Copied "E2E Insert Template".');
-    await expect(options.getByLabel("ID")).toHaveValue("e2e-insert-template-copy");
+    await expect(options.getByLabel("ID", { exact: true })).toHaveValue("e2e-insert-template-copy");
 
     options.once("dialog", (dialog) => {
       void dialog.accept();
     });
-    await options.getByRole("button", { name: "Delete" }).click();
+    await options.getByRole("button", { name: "Delete", exact: true }).click();
     await expect(options.locator(".status")).toContainText('Deleted "E2E Insert Template copy".');
     await expect.poll(() => readTemplates(options).then((items) => items.length)).toBe(8);
 
@@ -1330,7 +1333,7 @@ test("overwrite clears a removed selection and saving afterwards creates a persi
   try {
     const options = await resetExtensionStorage(app.extensionId, app.context);
     await options.getByRole("button", { name: /Rewrite clearer/ }).click();
-    const originalBody = await options.getByLabel("Body").inputValue();
+    const originalBody = await options.getByLabel("Body", { exact: true }).inputValue();
     const importPath = testInfo.outputPath("replacement.json");
     await writeImportFile(importPath, [
       createTemplate("replacement", "Replacement", "Imported replacement body", ["imported"]),
@@ -1340,8 +1343,8 @@ test("overwrite clears a removed selection and saving afterwards creates a persi
 
     options.once("dialog", (dialog) => { void dialog.dismiss(); });
     await options.getByRole("button", { name: "Overwrite" }).click();
-    await expect(options.getByLabel("ID")).toHaveValue("rewrite-clearer");
-    await expect(options.getByLabel("Body")).toHaveValue(originalBody);
+    await expect(options.getByLabel("ID", { exact: true })).toHaveValue("rewrite-clearer");
+    await expect(options.getByLabel("Body", { exact: true })).toHaveValue(originalBody);
     expect(await readTemplates(options)).toHaveLength(7);
     await expect(options.getByRole("button", { name: "Overwrite" })).toBeVisible();
 
@@ -1355,8 +1358,8 @@ test("overwrite clears a removed selection and saving afterwards creates a persi
     await expect(options.getByLabel("Favorite", { exact: true })).not.toBeChecked();
     await expect(options.locator(".template-row.selected")).toHaveCount(0);
 
-    await options.getByLabel("Title").fill("Save after overwrite");
-    await options.getByLabel("Body").fill("This must not be lost");
+    await options.getByLabel("Title", { exact: true }).fill("Save after overwrite");
+    await options.getByLabel("Body", { exact: true }).fill("This must not be lost");
     await options.getByRole("button", { name: "Save", exact: true }).click();
     await expect(options.locator(".status")).toContainText('Saved "Save after overwrite".');
     expect(await readTemplates(options)).toEqual(expect.arrayContaining([
@@ -1366,7 +1369,7 @@ test("overwrite clears a removed selection and saving afterwards creates a persi
     await options.reload();
     await expect(options.locator(".status")).toContainText("2 templates loaded.");
     await options.getByRole("button", { name: /Save after overwrite/ }).click();
-    await expect(options.getByLabel("Body")).toHaveValue("This must not be lost");
+    await expect(options.getByLabel("Body", { exact: true })).toHaveValue("This must not be lost");
   } finally {
     await app.context.close();
   }
@@ -1396,13 +1399,13 @@ for (const mode of ["Merge", "Overwrite"] as const) {
       await options.getByRole("button", { name: mode }).click();
       await expect(options.locator(".status")).toContainText("Imported");
       await expect(options.getByRole("heading", { name: "Edit template" })).toBeVisible();
-      await expect(options.getByLabel("ID")).toHaveValue(imported.id);
-      await expect(options.getByLabel("Title")).toHaveValue(imported.title);
-      await expect(options.getByLabel("Body")).toHaveValue(imported.body);
-      await expect(options.getByLabel("Tags")).toHaveValue("new, tags");
+      await expect(options.getByLabel("ID", { exact: true })).toHaveValue(imported.id);
+      await expect(options.getByLabel("Title", { exact: true })).toHaveValue(imported.title);
+      await expect(options.getByLabel("Body", { exact: true })).toHaveValue(imported.body);
+      await expect(options.getByLabel("Tags", { exact: true })).toHaveValue("new, tags");
       await expect(options.getByLabel("Favorite", { exact: true })).toBeChecked();
 
-      await options.getByLabel("Tags").fill("edited");
+      await options.getByLabel("Tags", { exact: true }).fill("edited");
       await options.getByRole("button", { name: "Save", exact: true }).click();
       await expect(options.locator(".status")).toContainText('Saved "Imported title".');
       const saved = (await readTemplates(options)).find((item) => item.id === imported.id);
@@ -1410,8 +1413,8 @@ for (const mode of ["Merge", "Overwrite"] as const) {
       await options.reload();
       await expect(options.locator(".status")).toContainText("templates loaded.");
       await options.getByRole("button", { name: /Imported title/ }).click();
-      await expect(options.getByLabel("Body")).toHaveValue(imported.body);
-      await expect(options.getByLabel("Tags")).toHaveValue("edited");
+      await expect(options.getByLabel("Body", { exact: true })).toHaveValue(imported.body);
+      await expect(options.getByLabel("Tags", { exact: true })).toHaveValue("edited");
     } finally {
       await app.context.close();
     }
@@ -1428,7 +1431,7 @@ test("a failed import preserves the editor and pending import for retry", async 
     const options = await resetExtensionStorage(app.extensionId, app.context);
     await options.getByRole("button", { name: /Rewrite clearer/ }).click();
     const before = await readTemplates(options);
-    const originalBody = await options.getByLabel("Body").inputValue();
+    const originalBody = await options.getByLabel("Body", { exact: true }).inputValue();
     const importPath = testInfo.outputPath("failed-import.json");
     await writeImportFile(importPath, [
       createTemplate("rewrite-clearer", "Retry title", "Retry body", []),
@@ -1447,16 +1450,16 @@ test("a failed import preserves the editor and pending import for retry", async 
     await options.getByRole("button", { name: "Merge" }).click();
     await expect(options.locator(".status.error")).toContainText("Test storage failure");
     await expect(options.getByRole("button", { name: "Merge" })).toBeVisible();
-    await expect(options.getByLabel("ID")).toHaveValue("rewrite-clearer");
-    await expect(options.getByLabel("Title")).toHaveValue("Rewrite clearer");
-    await expect(options.getByLabel("Body")).toHaveValue(originalBody);
+    await expect(options.getByLabel("ID", { exact: true })).toHaveValue("rewrite-clearer");
+    await expect(options.getByLabel("Title", { exact: true })).toHaveValue("Rewrite clearer");
+    await expect(options.getByLabel("Body", { exact: true })).toHaveValue(originalBody);
     expect(await readTemplates(options)).toEqual(before);
 
     await options.evaluate(() => window.dispatchEvent(new Event("promptcrate:test-restore-storage")));
     await options.getByRole("button", { name: "Merge" }).click();
     await expect(options.locator(".status")).toContainText("Imported 0 new and 1 updated templates.");
-    await expect(options.getByLabel("Title")).toHaveValue("Retry title");
-    await expect(options.getByLabel("Body")).toHaveValue("Retry body");
+    await expect(options.getByLabel("Title", { exact: true })).toHaveValue("Retry title");
+    await expect(options.getByLabel("Body", { exact: true })).toHaveValue("Retry body");
     await expect(options.getByRole("button", { name: "Merge" })).toHaveCount(0);
   } finally {
     await app.context.close();
@@ -2088,6 +2091,7 @@ test("variable memory requires opt-in and clears cached values on clear and opt-
   const app = await launchPromptCrate(testInfo.outputPath("profile-variable-memory"));
   try {
     const options = await resetExtensionStorage(app.extensionId, app.context);
+    await openPreferences(options);
     await options.evaluate((record) => chrome.storage.local.set({ "promptCrate.templates": [record] }),
       createTemplate("remember", "Remember language", "Translate to {{language=English}}", []));
     const preference = options.getByRole("checkbox", { name: "Remember variable values", exact: true });
@@ -2152,6 +2156,7 @@ test("language switching translates open drafts and initializes only new librari
     await chooseTemplateFromMenu(page, original.title);
     const menu = menuPanel(page);
     await menu.getByLabel("text", { exact: true }).fill("Keep my unfinished draft");
+    await openPreferences(options);
     await options.getByRole("combobox", { name: "Language", exact: true }).selectOption("zh_CN");
     await expect(options.getByRole("combobox", { name: "语言", exact: true })).toHaveValue("zh_CN");
     await expect(menu.getByRole("button", { name: "插入", exact: true })).toBeVisible();
@@ -2177,6 +2182,7 @@ test("language switching translates open drafts and initializes only new librari
     const localized = await readTemplates(options);
     expect(localized.some((record) => record.title === "改写得更清晰")).toBe(true);
     expect(localized.some((record) => record.title === "Rewrite clearer")).toBe(false);
+    await openPreferences(options);
     await expect(options.getByRole("combobox", { name: "语言", exact: true })).toHaveValue("zh_CN");
   } finally {
     await app.context.close();
@@ -2202,6 +2208,7 @@ test("delayed variable memory cannot overwrite a draft exposed by language switc
     await delayNextContentRead(page, app, "delay", "READ_VARIABLE_MEMORY");
     await chooseTemplateFromMenu(page, template.title);
     await expect(page.locator("html")).toHaveAttribute("data-promptcrate-read-blocked", "true");
+    await openPreferences(options);
     await options.getByRole("combobox", { name: "Language", exact: true }).selectOption("zh_CN");
     const field = menuPanel(page).getByLabel("text", { exact: true });
     await expect(field).toHaveValue("Default text");
@@ -2218,6 +2225,406 @@ test("delayed variable memory cannot overwrite a draft exposed by language switc
       const memory = await chrome.runtime.sendMessage({ type: "READ_VARIABLE_MEMORY", templateId: record.id, createdAt: record.createdAt });
       return memory.values;
     }, template)).toEqual({ text: "My new draft" });
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("Options protects dirty drafts during navigation and saves with the keyboard", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-draft-protection"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    await options.locator(".template-row").filter({ hasText: "Rewrite clearer" }).click();
+    await options.getByLabel("Body", { exact: true }).fill("An unfinished draft");
+    options.once("dialog", (dialog) => {
+      expect(dialog.message()).toBe("Discard unsaved changes?");
+      void dialog.dismiss();
+    });
+    await options.getByRole("button", { name: "New", exact: true }).click();
+    await expect(options.getByLabel("Body", { exact: true })).toHaveValue("An unfinished draft");
+    options.once("dialog", (dialog) => {
+      expect(dialog.message()).toBe("Discard unsaved changes?");
+      void dialog.dismiss();
+    });
+    await options.locator(".template-row").filter({ hasText: "Draft reply" }).click();
+    await expect(options.getByLabel("ID", { exact: true })).toHaveValue("rewrite-clearer");
+
+    const unload = options.waitForEvent("dialog");
+    await options.close({ runBeforeUnload: true });
+    const unloadDialog = await unload;
+    expect(unloadDialog.type()).toBe("beforeunload");
+    await unloadDialog.dismiss();
+    expect(options.isClosed()).toBe(false);
+    await options.getByLabel("Body", { exact: true }).focus();
+    await options.keyboard.press("ControlOrMeta+s");
+    await expect(options.locator(".status")).toContainText('Saved "Rewrite clearer".');
+    expect((await readTemplates(options)).find((record) => record.id === "rewrite-clearer")?.body).toBe("An unfinished draft");
+    await options.getByLabel("Body", { exact: true }).fill("Discard this later draft");
+    options.once("dialog", (dialog) => { void dialog.accept(); });
+    await options.locator(".template-row").filter({ hasText: "Draft reply" }).click();
+    await expect(options.getByLabel("ID", { exact: true })).toHaveValue("draft-reply");
+    expect((await readTemplates(options)).find((record) => record.id === "rewrite-clearer")?.body).toBe("An unfinished draft");
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("Options leaves dirty drafts intact when copy, delete, and import are cancelled", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-dirty-actions"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    const before = await readTemplates(options);
+    await options.locator(".template-row").filter({ hasText: "Rewrite clearer" }).click();
+    await options.getByLabel("Body", { exact: true }).fill("Preserve this unsaved body");
+    for (const name of ["Copy", "Delete"]) {
+      options.once("dialog", (dialog) => {
+        expect(dialog.message()).toBe("Discard unsaved changes?");
+        void dialog.dismiss();
+      });
+      await options.getByRole("button", { name, exact: true }).click();
+      await expect(options.getByLabel("Body", { exact: true })).toHaveValue("Preserve this unsaved body");
+      expect(await readTemplates(options)).toEqual(before);
+    }
+    await options.locator('input[type="file"]').setInputFiles({
+      name: "draft-import.json", mimeType: "application/json",
+      buffer: Buffer.from(JSON.stringify([{ title: "Incoming template", body: "Incoming body" }])),
+    });
+    await expect(options.getByRole("region", { name: "Import preview", exact: true })).toBeVisible();
+    await expect(options.getByLabel("Body", { exact: true })).toHaveValue("Preserve this unsaved body");
+    options.once("dialog", (dialog) => {
+      expect(dialog.message()).toBe("Discard unsaved changes?");
+      void dialog.dismiss();
+    });
+    await options.getByRole("button", { name: "Merge", exact: true }).click();
+    await expect(options.getByLabel("Body", { exact: true })).toHaveValue("Preserve this unsaved body");
+    expect(await readTemplates(options)).toEqual(before);
+    await options.locator('input[type="file"]').setInputFiles({
+      name: "invalid-next.json", mimeType: "application/json", buffer: Buffer.from("{ invalid json"),
+    });
+    await expect(options.locator(".status.error")).toContainText("not valid JSON");
+    await expect(options.getByRole("checkbox", { name: 'Import "Incoming template"', exact: true })).toBeChecked();
+    await options.getByRole("button", { name: "Cancel import", exact: true }).click();
+    await expect(options.getByRole("region", { name: "Import preview", exact: true })).toHaveCount(0);
+    await expect(options.getByLabel("Body", { exact: true })).toHaveValue("Preserve this unsaved body");
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("Options combines tag filters and exports or deletes only the selected templates", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-tags-bulk"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    const records = [
+      createTemplate("alpha", "Alpha", "Alpha body", ["writing", "team"]),
+      createTemplate("beta", "Beta", "Beta body", ["writing"]),
+      createTemplate("gamma", "Gamma", "Gamma body", ["team"]),
+    ];
+    await options.evaluate((templates) => chrome.storage.local.set({ "promptCrate.templates": templates }), records);
+    await expect(options.locator(".template-row")).toHaveCount(3);
+    const tags = options.getByRole("group", { name: "Filter by tags (match all)", exact: true });
+    await tags.getByRole("button", { name: "writing", exact: true }).click();
+    await expect(options.locator(".template-row")).toHaveCount(2);
+    await tags.getByRole("button", { name: "team", exact: true }).click();
+    await expect(options.locator(".template-row")).toHaveCount(1);
+    await expect(options.locator(".template-row")).toContainText("Alpha");
+    await options.getByRole("button", { name: "Select visible", exact: true }).click();
+    await expect(options.getByRole("checkbox", { name: 'Select "Alpha"', exact: true })).toBeChecked();
+    await options.getByRole("button", { name: "Clear tag filters", exact: true }).click();
+    await options.getByRole("checkbox", { name: 'Select "Gamma"', exact: true }).check();
+    const [download] = await Promise.all([
+      options.waitForEvent("download"),
+      options.getByRole("button", { name: "Export selected", exact: true }).click(),
+    ]);
+    const outputPath = testInfo.outputPath("selected-templates.json");
+    await download.saveAs(outputPath);
+    const exported = JSON.parse(await fs.readFile(outputPath, "utf8")) as TemplateExportPayloadRecord;
+    expect(exported.templates.map((record) => record.id).sort()).toEqual(["alpha", "gamma"]);
+    options.once("dialog", (dialog) => { void dialog.dismiss(); });
+    await options.getByRole("button", { name: "Delete selected", exact: true }).click();
+    expect(await readTemplates(options)).toEqual(records);
+    options.once("dialog", (dialog) => { void dialog.accept(); });
+    await options.getByRole("button", { name: "Delete selected", exact: true }).click();
+    await expect(options.locator(".template-row")).toHaveCount(1);
+    expect((await readTemplates(options)).map((record) => record.id)).toEqual(["beta"]);
+    await expect(options.getByRole("button", { name: "Delete selected", exact: true })).toBeDisabled();
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("bulk deletion preserves an unrelated draft whose template was deleted in another Options tab", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-bulk-orphaned-draft"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    const records = [
+      createTemplate("alpha", "Alpha", "Original Alpha body", []),
+      createTemplate("beta", "Beta", "Unrelated Beta body", []),
+      createTemplate("gamma", "Gamma", "Unrelated Gamma body", []),
+    ];
+    await options.evaluate((templates) => chrome.storage.local.set({ "promptCrate.templates": templates }), records);
+    await options.locator(".template-row").filter({ hasText: "Alpha" }).click();
+    await options.getByLabel("Title", { exact: true }).fill("Unfinished Alpha draft");
+    await options.getByLabel("Body", { exact: true }).fill("This draft must survive deleting Beta");
+
+    const second = await app.context.newPage();
+    await second.goto(`chrome-extension://${app.extensionId}/options.html`);
+    await second.locator(".template-row").filter({ hasText: "Alpha" }).click();
+    second.once("dialog", (dialog) => { void dialog.accept(); });
+    await second.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(second.locator(".status")).toContainText('Deleted "Alpha".');
+    await expect(options.getByRole("button", { name: "Keep as new", exact: true })).toBeVisible();
+    await expect(options.getByLabel("ID", { exact: true })).toHaveValue("alpha");
+    await expect(options.getByLabel("Title", { exact: true })).toHaveValue("Unfinished Alpha draft");
+    await expect(options.getByLabel("Body", { exact: true })).toHaveValue("This draft must survive deleting Beta");
+
+    await options.getByRole("checkbox", { name: 'Select "Beta"', exact: true }).check();
+    options.once("dialog", (dialog) => {
+      expect(dialog.message()).toBe("Delete 1 selected templates?");
+      void dialog.accept();
+    });
+    await options.getByRole("button", { name: "Delete selected", exact: true }).click();
+    await expect.poll(async () => (await readTemplates(options)).map((record) => record.id)).toEqual(["gamma"]);
+    await expect(options.getByRole("button", { name: "Keep as new", exact: true })).toBeVisible();
+    await expect(options.getByLabel("ID", { exact: true })).toHaveValue("alpha");
+    await expect(options.getByLabel("Title", { exact: true })).toHaveValue("Unfinished Alpha draft");
+    await expect(options.getByLabel("Body", { exact: true })).toHaveValue("This draft must survive deleting Beta");
+
+    await options.getByRole("button", { name: "Keep as new", exact: true }).click();
+    await options.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(options.locator(".status")).toContainText('Saved "Unfinished Alpha draft".');
+    const saved = await readTemplates(options);
+    expect(saved.map((record) => record.id).sort()).toEqual(["gamma", "unfinished-alpha-draft"]);
+    expect(saved.find((record) => record.id === "unfinished-alpha-draft")).toMatchObject({
+      title: "Unfinished Alpha draft", body: "This draft must survive deleting Beta",
+    });
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("Options persists manual order from keyboard moves and drag handles", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-manual-order"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    const records = [
+      createTemplate("alpha", "Alpha", "A", ["writing"]),
+      createTemplate("beta", "Beta", "B", ["writing"]),
+      createTemplate("gamma", "Gamma", "C", ["team"]),
+    ];
+    await options.evaluate((templates) => chrome.storage.local.set({ "promptCrate.templates": templates }), records);
+    await options.getByRole("combobox", { name: "Sort templates", exact: true }).selectOption("manual");
+    await options.getByRole("button", { name: 'Move "Gamma" up', exact: true }).click();
+    await expect.poll(async () => (await readTemplates(options)).map((record) => record.id)).toEqual(["alpha", "gamma", "beta"]);
+    await options.getByRole("button", { name: 'Reorder "Beta"', exact: true }).dragTo(
+      options.locator(".library-row").filter({ has: options.locator(".template-row").filter({ hasText: "Alpha" }) }),
+    );
+    await expect.poll(async () => (await readTemplates(options)).map((record) => record.id)).toEqual(["beta", "alpha", "gamma"]);
+    const reordered = await readTemplates(options);
+    expect(reordered.map((record) => [record.id, record.updatedAt]).sort()).toEqual(records.map((record) => [record.id, record.updatedAt]).sort());
+    await options.locator("input.search").fill("Alpha");
+    await expect(options.getByRole("button", { name: 'Move "Alpha" up', exact: true })).toBeDisabled();
+    await expect(options.getByText("Clear search and tag filters to reorder templates.", { exact: true })).toBeVisible();
+    await options.reload();
+    await options.getByRole("combobox", { name: "Sort templates", exact: true }).selectOption("manual");
+    await expect(options.locator(".template-row").first()).toContainText("Beta");
+    expect((await readTemplates(options)).map((record) => record.id)).toEqual(["beta", "alpha", "gamma"]);
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("loose import previews selectable new and replacement templates without changing timestamps", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-loose-import"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    const before = await readTemplates(options);
+    const historical = { ...createTemplate("rewrite-clearer", "Historical replacement", "Historic body", []),
+      createdAt: "2024-01-01T01:02:03.000Z", updatedAt: "2024-02-02T02:03:04.000Z" };
+    await options.locator('input[type="file"]').setInputFiles({
+      name: "minimal-array.json", mimeType: "application/json",
+      buffer: Buffer.from(JSON.stringify([
+        { title: "Minimal import", body: "Hello {{name}}" }, historical,
+        { title: "Excluded import", body: "Do not import" },
+      ])),
+    });
+    const preview = options.getByRole("region", { name: "Import preview", exact: true });
+    await expect(preview.getByRole("status")).toHaveText("New: 2 · Replace: 1");
+    expect(await readTemplates(options)).toEqual(before);
+    await preview.getByRole("checkbox", { name: 'Import "Excluded import"', exact: true }).uncheck();
+    await expect(preview.getByRole("status")).toHaveText("New: 1 · Replace: 1");
+    await preview.getByRole("button", { name: "Merge", exact: true }).click();
+    await expect(options.locator(".status")).toContainText("Imported 1 new and 1 updated templates.");
+    const imported = await readTemplates(options);
+    expect(imported.find((record) => record.id === "rewrite-clearer")).toEqual(historical);
+    expect(imported.find((record) => record.title === "Minimal import")).toMatchObject({ id: "minimal-import", body: "Hello {{name}}", tags: [], isFavorite: false });
+    expect(imported.some((record) => record.title === "Excluded import")).toBe(false);
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("overwrite import requires confirmation and replaces the library with the selected subset", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-selected-overwrite"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    const before = await readTemplates(options);
+    await options.locator('input[type="file"]').setInputFiles({
+      name: "overwrite-subset.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify([
+        { title: "Keep incoming", body: "Only this" }, { title: "Exclude incoming", body: "Never saved" },
+      ])),
+    });
+    const preview = options.getByRole("region", { name: "Import preview", exact: true });
+    await expect(preview.getByText("Merge keeps other templates. Overwrite replaces the entire library with only the selected imports.", { exact: true })).toBeVisible();
+    await preview.getByRole("button", { name: "Clear import selection", exact: true }).click();
+    await expect(preview.getByRole("button", { name: "Overwrite", exact: true })).toBeDisabled();
+    await preview.getByRole("checkbox", { name: 'Import "Keep incoming"', exact: true }).check();
+    options.once("dialog", (dialog) => { void dialog.dismiss(); });
+    await preview.getByRole("button", { name: "Overwrite", exact: true }).click();
+    expect(await readTemplates(options)).toEqual(before);
+    await expect(preview.getByRole("checkbox", { name: 'Import "Keep incoming"', exact: true })).toBeChecked();
+    options.once("dialog", (dialog) => { void dialog.accept(); });
+    await preview.getByRole("button", { name: "Overwrite", exact: true }).click();
+    await expect(options.locator(".status")).toContainText("Imported 1 templates by overwrite.");
+    expect((await readTemplates(options)).map((record) => record.title)).toEqual(["Keep incoming"]);
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("an import preview refuses to overwrite a template changed in another Options tab", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-stale-preview"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    await options.locator('input[type="file"]').setInputFiles({
+      name: "stale-preview.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify([
+        { ...createTemplate("rewrite-clearer", "Incoming old revision", "Imported stale value", []) },
+      ])),
+    });
+    await expect(options.getByRole("button", { name: "Merge", exact: true })).toBeVisible();
+    const second = await app.context.newPage();
+    await second.goto(`chrome-extension://${app.extensionId}/options.html`);
+    await second.locator(".template-row").filter({ hasText: "Rewrite clearer" }).click();
+    await second.getByLabel("Body", { exact: true }).fill("Newer value from another tab");
+    await second.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(second.locator(".status")).toContainText('Saved "Rewrite clearer".');
+    await options.getByRole("button", { name: "Merge", exact: true }).click();
+    await expect(options.locator(".status.error")).toContainText("another tab");
+    await expect(options.getByRole("region", { name: "Import preview", exact: true })).toBeVisible();
+    expect((await readTemplates(options)).find((record) => record.id === "rewrite-clearer")?.body).toBe("Newer value from another tab");
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("Options variable preview follows defaults, edited example values, and syntax errors", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-editor-preview"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    await options.getByLabel("Title", { exact: true }).fill("Preview-only draft");
+    await options.getByLabel("Body", { exact: true }).fill('Write {{text "Text"=Hello}} in {{tone|formal|casual}}. {{note?}} {{@date}}');
+    const preview = options.getByRole("region", { name: "Template preview", exact: true });
+    await expect(preview.getByRole("heading", { name: "Variables", exact: true })).toBeVisible();
+    await expect(preview.locator(".template-preview")).toContainText("Write Hello in formal.");
+    await preview.getByLabel("Preview value: Text", { exact: true }).fill("Edited example");
+    await expect(preview.locator(".template-preview")).toContainText("Write Edited example in formal.");
+    expect((await readTemplates(options)).some((record) => record.title === "Preview-only draft")).toBe(false);
+    await options.setViewportSize({ width: 1280, height: 720 });
+    await options.evaluate(() => window.scrollTo(0, 0));
+    const englishScreenshot = testInfo.outputPath("options-management-en.png");
+    await options.screenshot({ path: englishScreenshot, fullPage: true });
+    await testInfo.attach("options-management-en", { path: englishScreenshot, contentType: "image/png" });
+    await openPreferences(options);
+    await options.getByRole("combobox", { name: "Language", exact: true }).selectOption("zh_CN");
+    await expect(options.getByRole("combobox", { name: "语言", exact: true })).toHaveValue("zh_CN");
+    await options.locator("details.preferences > summary").click();
+    const chineseScreenshot = testInfo.outputPath("options-management-zh.png");
+    await options.screenshot({ path: chineseScreenshot, fullPage: true });
+    await testInfo.attach("options-management-zh", { path: chineseScreenshot, contentType: "image/png" });
+    await options.setViewportSize({ width: 700, height: 800 });
+    expect(await options.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    const mobileScreenshot = testInfo.outputPath("options-management-zh-mobile.png");
+    await options.screenshot({ path: mobileScreenshot, fullPage: true });
+    await testInfo.attach("options-management-zh-mobile", { path: mobileScreenshot, contentType: "image/png" });
+    await openPreferences(options);
+    await options.getByRole("combobox", { name: "语言", exact: true }).selectOption("en");
+    await expect(options.getByRole("combobox", { name: "Language", exact: true })).toHaveValue("en");
+    await options.getByLabel("Body", { exact: true }).fill("Broken {{bad.name}}");
+    await expect(preview.locator(".variable-diagnostics")).toContainText("Invalid variable name: bad.name");
+    expect((await readTemplates(options)).some((record) => record.title === "Preview-only draft")).toBe(false);
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("Options exports damaged backups and previews only recoverable templates before restoring", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-recovery-backups"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    const raw = [{ title: "Recovered personal template", body: "Recovered {{text}}" }, { title: 42, body: "Broken" }];
+    await options.evaluate((templates) => chrome.storage.local.set({ "promptCrate.templates": templates }), raw);
+    const health = options.getByRole("region", { name: "Library storage and recovery", exact: true });
+    await expect(health.getByRole("heading", { name: "Saved recovery backups", exact: true })).toBeVisible();
+    await expect(health.locator(".library-storage-usage")).toContainText("MiB of 10.00 MiB used");
+    const backup = health.locator(".library-recovery li").first();
+    const [download] = await Promise.all([
+      options.waitForEvent("download"), backup.getByRole("button", { name: "Export backup", exact: true }).click(),
+    ]);
+    const outputPath = testInfo.outputPath("damaged-backup.json");
+    await download.saveAs(outputPath);
+    const exported: unknown = JSON.parse(await fs.readFile(outputPath, "utf8"));
+    expect(exported).toEqual(raw);
+    const before = await readTemplates(options);
+    await backup.getByRole("button", { name: "Try recovery", exact: true }).click();
+    const preview = options.getByRole("region", { name: "Import preview", exact: true });
+    await expect(preview.getByRole("checkbox", { name: 'Import "Recovered personal template"', exact: true })).toBeChecked();
+    await expect(options.locator(".status")).toContainText("1");
+    await expect(options.locator(".status")).toContainText("skipped");
+    expect(await readTemplates(options)).toEqual(before);
+    await preview.getByRole("button", { name: "Merge", exact: true }).click();
+    await expect(options.locator(".status")).toContainText("Imported 1 new and 0 updated templates.");
+    expect((await readTemplates(options)).some((record) => record.title === "Recovered personal template")).toBe(true);
+    await expect(health.getByRole("button", { name: "Export backup", exact: true })).toBeVisible();
+  } finally {
+    await app.context.close();
+  }
+});
+
+test("Options warns when local storage approaches its quota", async ({ browserName }, testInfo) => {
+  expect(browserName).toBe("chromium");
+  const app = await launchPromptCrate(testInfo.outputPath("profile-storage-warning"));
+  try {
+    const options = await resetExtensionStorage(app.extensionId, app.context);
+    const worker = app.context.serviceWorkers()[0] ?? await app.context.waitForEvent("serviceworker");
+    await worker.evaluate(() => {
+      const original = chrome.storage.local.getBytesInUse.bind(chrome.storage.local);
+      (globalThis as typeof globalThis & { __restoreStorageMeasurement?: () => void }).__restoreStorageMeasurement = () => {
+        chrome.storage.local.getBytesInUse = original;
+      };
+      chrome.storage.local.getBytesInUse = (() => Promise.resolve(Math.ceil(chrome.storage.local.QUOTA_BYTES * 0.95))) as typeof chrome.storage.local.getBytesInUse;
+    });
+    await options.evaluate(() => chrome.storage.local.set({ "promptCrate.theme": "dark" }));
+    const health = options.getByRole("region", { name: "Library storage and recovery", exact: true });
+    await expect(health.locator(".library-storage-usage")).toContainText("95%");
+    await expect(health.getByRole("status")).toContainText("Storage is almost full.");
+    await worker.evaluate(() => {
+      const scope = globalThis as typeof globalThis & { __restoreStorageMeasurement?: () => void };
+      scope.__restoreStorageMeasurement?.();
+      delete scope.__restoreStorageMeasurement;
+    });
+    await options.evaluate(() => chrome.storage.local.set({ "promptCrate.theme": "light" }));
+    await expect(health.getByText("Storage is almost full. Export a backup and remove templates you no longer need.", { exact: true })).toHaveCount(0);
+    await expect(health.locator(".library-storage-usage")).toContainText("0%");
   } finally {
     await app.context.close();
   }
@@ -2340,6 +2747,13 @@ async function expectRegisteredShortcut(extensionPage: Page): Promise<void> {
   });
 
   expect(shortcut).toBe("Ctrl+Shift+2");
+}
+
+async function openPreferences(options: Page): Promise<void> {
+  const preferences = options.locator("details.preferences");
+  if (!await preferences.evaluate((element: HTMLDetailsElement) => element.open)) {
+    await preferences.locator("summary").click();
+  }
 }
 
 async function primePromptCrateContentScript(
